@@ -1,0 +1,17 @@
+Comand -> Description
+
+python3 -m venv <envName>  -> create new env
+
+source <envName>/bin/activate -> activate the env
+
+deactivate -> deactivate the env
+
+pip list -> show what install on the env
+
+pip install <packageName> -> install the package we want
+
+pip freeze > <fileName.txt> -> will set a file with the requirements of env
+
+pip install -r <fileName.txt> -> install the file requirements inside env 
+
+python scripts/marked_detection/detect_marked.py -> Run last year's project (marked detection)
