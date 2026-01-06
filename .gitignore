@@ -1,4 +1,4 @@
-# Virtual environment
+# Virtual environments
 .venv/
 venv/
 
@@ -6,12 +6,24 @@ venv/
 __pycache__/
 *.pyc
 
-# Data and outputs
+# YOLO / Ultralytics outputs
+runs/
+.yolo/
+
+# Data (generated / large)
 data/raw/
 data/processed/
-outputs/
+data/frames/
+data/frames_subset/
 
-# OS
+# Datasets (Roboflow / YOLO exports)
+datasets/
+
+# OS files
 .DS_Store
 Thumbs.db
 __MACOSX/
+
+# Logs / temp
+*.log
+*.tmp

@@ -1,17 +1,13 @@
-Comand -> Description
-
-python3 -m venv <envName>  -> create new env
-
-source <envName>/bin/activate -> activate the env
-
-deactivate -> deactivate the env
-
-pip list -> show what install on the env
-
-pip install <packageName> -> install the package we want
-
-pip freeze > <fileName.txt> -> will set a file with the requirements of env
-
-pip install -r <fileName.txt> -> install the file requirements inside env 
-
 python scripts/marked_detection/detect_marked.py -> Run last year's project (marked detection)
+
+pip install -r requirements.txt -> Downloading project dependencies
+
+./.venv/Scripts/python.exe -m pip freeze > requirements.txt -> Update dependencies based on what is actually installed
+
+python scripts/extract_frames.py -> Initial extraction of frames (need to update video name in file)
+
+python scripts/make_subset.py -> Second extraction (of 250 frames), need to update video name in file
+
+.venv/Scripts/python.exe scripts/train_tag_detector.py -> Train tag detector model
+
+./.venv/Scripts/python.exe scripts/number_detection/detect_tag_and_number.py -> Run tag + number detection model
