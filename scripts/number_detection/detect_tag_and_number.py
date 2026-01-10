@@ -1,31 +1,32 @@
+from collections import deque, defaultdict, Counter
 from ultralytics import YOLO
 from config import *
 import cv2
 import re
 import easyocr
-from collections import deque, defaultdict, Counter
 
 reader = easyocr.Reader(["en"], gpu=True)
 
 def center_crop(img, ratio):
+    """Crop the center region of the image using the given ratio."""
     h, w = img.shape[:2]
     ch, cw = int(h * ratio), int(w * ratio)
     y1 = (h - ch) // 2
     x1 = (w - cw) // 2
     return img[y1:y1 + ch, x1:x1 + cw]
 
-
 def blur_score(gray):
+    """Calculate Laplacian variance as a measure of image sharpness (blur score)."""
     return cv2.Laplacian(gray, cv2.CV_64F).var()
 
-
 def rotate(img, ang):
+    """Rotate the input image by a given angle around its center."""
     h, w = img.shape[:2]
     M = cv2.getRotationMatrix2D((w / 2, h / 2), ang, 1.0)
     return cv2.warpAffine(img, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
 
-
 def deskew_gray(gray):
+    """Auto-correct skew in a grayscale image using edge detection and minimum bounding rectangle."""
     edges = cv2.Canny(gray, 50, 150)
     pts = cv2.findNonZero(edges)
     if pts is None:
@@ -36,21 +37,25 @@ def deskew_gray(gray):
         angle = 90 + angle
     return rotate(gray, angle)
 
-
 def sharpen(gray):
+    """Apply unsharp masking to enhance edges in a grayscale image."""
     blur = cv2.GaussianBlur(gray, (0, 0), 1.0)
     return cv2.addWeighted(gray, 1.6, blur, -0.6, 0)
 
-
 def prep_variants(gray):
+    """Generate sharpened and thresholded variants of a grayscale image for OCR."""
     g = sharpen(gray)
     _, thr = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     return (g, thr, cv2.bitwise_not(thr))
 
-_digit_re = re.compile(r"\d{1,3}")
-
-
 def read_digits(crop_bgr):
+    """
+    Run OCR on a cropped BGR image to detect up to 3-digit numbers (0–999).
+    Tries multiple variants and angles to improve recognition accuracy.
+    Returns: (number_string, confidence)
+    """
+    _digit_re = re.compile(r"\d{1,3}")
+
     if crop_bgr is None or crop_bgr.size == 0:
         return None, 0.0
 
@@ -76,8 +81,11 @@ def read_digits(crop_bgr):
                     
     return best_text, best_conf
 
-
 def vote_number(hist):
+    """
+    Perform weighted voting over recent OCR results to stabilize predictions.
+    Returns: (dominant_number, confidence) if dominant enough, else (None, 0.0)
+    """
     if not hist:
         return None, 0.0
     weights = defaultdict(float)
@@ -88,8 +96,8 @@ def vote_number(hist):
     dom = w / total if total > 0 else 0.0
     return (num, w / total) if dom >= VOTE_DOMINANCE else (None, 0.0)
 
-
 def main():
+    """Main function: loads video, runs detection and OCR pipeline, and displays results frame-by-frame."""
     # === Load model and video ===
     final_number = None
     final_conf = 0.0
