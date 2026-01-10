@@ -10,4 +10,6 @@ python scripts/make_subset.py -> Second extraction (of 250 frames), need to upda
 
 .venv/Scripts/python.exe scripts/train_tag_detector.py -> Train tag detector model
 
-./.venv/Scripts/python.exe scripts/number_detection/detect_tag_and_number.py -> Run tag + number detection model
+./.venv/Scripts/python.exe scripts/number_detection/detect_tag_and_number.py -> Run tag + number detection model (bash terminal)
+
+python .\scripts\number_detection\detect_tag_and_number.py ->  Run tag + number detection model (powershell terminal)
