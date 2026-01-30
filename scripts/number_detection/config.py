@@ -1,7 +1,7 @@
 # config.py
 
 MODEL_PATH = r"runs\tag_detection\train\weights\best.pt"
-VIDEO_PATH = r"data\raw\entrance\beeVideo2.mp4"
+VIDEO_PATH = r"data\raw\entrance\beeVideo.mp4"
 
 DET_CONF = 0.4
 PADDING = 6
