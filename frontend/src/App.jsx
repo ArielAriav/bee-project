@@ -3,26 +3,25 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 
 function App() {
-  const [status, setStatus] = useState('idle'); // idle, processing, finished
-  const [summary, setSummary] = useState(null);
+  const [status, setStatus] = useState('idle');
+  const [bees, setBees] = useState([]); 
   const [videoUrl, setVideoUrl] = useState(null);
 
-  // Polls the backend for results
   useEffect(() => {
     let interval;
     if (status === 'processing') {
       interval = setInterval(async () => {
         try {
           const res = await axios.get("http://localhost:8000/get-result");
-          setSummary(res.data);
-          
-          // Check if video finished playing
+          if (res.data.bees) {
+            setBees(res.data.bees);
+          }
           if (res.data.video_ended) {
             setStatus('finished');
             clearInterval(interval);
           }
-        } catch (e) { console.error(e); }
-      }, 1000);
+        } catch (e) { console.error("Poll error:", e); }
+      }, 1000); 
     }
     return () => clearInterval(interval);
   }, [status]);
@@ -32,7 +31,8 @@ function App() {
     if (!file) return;
 
     setVideoUrl(null);
-    setSummary(null);
+    setBees([]);
+    setStatus('idle');
     e.target.value = ""; 
 
     const formData = new FormData();
@@ -40,89 +40,75 @@ function App() {
 
     try {
       const res = await axios.post("http://localhost:8000/upload-video", formData);
-      const { filename, session_id } = res.data;
-      const streamUrl = `http://localhost:8000/video-feed?filename=${filename}&session_id=${session_id}`;
-      
-      setVideoUrl(streamUrl);
+      setVideoUrl(`http://localhost:8000/video-feed?filename=${res.data.filename}&session_id=${res.data.session_id}`);
       setStatus('processing');
-    } catch (e) {
-      alert("Upload failed.");
-    }
+    } catch (e) { alert("Upload failed"); }
   };
 
   const reset = () => {
     setStatus('idle');
-    setSummary(null);
+    setBees([]);
     setVideoUrl(null);
   };
 
   return (
     <div style={styles.container}>
-      {/* Sidebar */}
       <div style={styles.sidebar}>
         <div style={styles.logo}>🐝 Bee<span>Vision</span></div>
+        <div style={styles.listHeader}>Detections: {bees.length}</div>
         
-        <div style={styles.stats}>
-          <div style={styles.statBox}>
-            <label style={styles.label}>Current ID</label>
-            <span style={{...styles.val, color: summary?.is_locked ? '#f1c40f' : '#fff'}}>
-              {summary?.id || "--"}
-            </span>
-          </div>
-
-          <div style={styles.statBox}>
-            <label style={styles.label}>Status</label>
-            <div style={{display: 'flex', alignItems: 'center'}}>
-               <span>{status === 'finished' ? "Completed" : (summary?.status || "Idle")}</span>
-               {summary?.is_locked && <span style={styles.badge}>LOCKED</span>}
+        <div style={styles.scrollArea}>
+          {bees.length === 0 && status === 'processing' && (
+            <div style={styles.statusMsg}>Waiting for data...</div>
+          )}
+          {bees.map((bee) => (
+            <div key={bee.track_id} style={{
+              ...styles.beeCard, 
+              borderColor: bee.is_locked ? '#f1c40f' : '#333'
+            }}>
+              <div style={styles.cardHeader}>
+                <span>Track ID: {bee.track_id}</span>
+                {bee.is_locked && <span style={styles.badge}>LOCKED</span>}
+              </div>
+              <div style={styles.beeNum}>{bee.number || 'Scanning...'}</div>
+              <div style={styles.confidence}>Conf: {(bee.confidence * 100).toFixed(0)}%</div>
             </div>
-          </div>
-          
-          <div style={styles.statBox}>
-            <label style={styles.label}>Confidence</label>
-             <span>{(summary?.confidence * 100 || 0).toFixed(1)}%</span>
-          </div>
+          ))}
         </div>
-
         {status !== 'idle' && (
           <button onClick={reset} style={styles.btnReset}>New Scan</button>
         )}
       </div>
 
-      {/* Main Area */}
       <div style={styles.main}>
         {status === 'idle' && (
           <div style={styles.upload}>
-            <h2 style={{marginTop: 0}}>Start New Analysis</h2>
-            <p style={{color: '#888'}}>Upload a video file to begin detection</p>
+            <h2 style={{marginTop: 0}}>Tag & number Recognition</h2>
+            <p style={{color: '#888'}}>Upload video to identify tags</p>
             <input type="file" id="up" hidden onChange={handleUpload} accept="video/*" />
             <label htmlFor="up" style={styles.btnUpload}>Select Video</label>
           </div>
         )}
-
-        {status === 'processing' && (
+        {status !== 'idle' && videoUrl && (
           <div style={styles.videoBox}>
-            {videoUrl && <img src={videoUrl} alt="Live Stream" style={styles.img} />}
+            <img src={videoUrl} alt="Live Stream" style={styles.img} />
           </div>
         )}
 
-        {/* --- FINAL REPORT CARD (Pop-up when finished) --- */}
         {status === 'finished' && (
-          <div style={styles.finalCard}>
-            <div style={styles.finalHeader}>🎥 Analysis Complete</div>
-            
-            <div style={styles.finalContent}>
-              <div style={styles.finalBigNum}>
-                {summary?.id || "Unknown"}
+          <div style={styles.finalOverlay}>
+            <div style={styles.finalCard}>
+              <div style={styles.finalHeader}>🎥 Session Complete</div>
+              <div style={styles.finalSub}>Identified {bees.filter(b => b.number).length} unique tags</div>
+              <div style={styles.grid}>
+                {bees.filter(b => b.number).map(bee => (
+                  <div key={bee.track_id} style={styles.gridItem}>
+                    <div style={styles.gridNum}>{bee.number}</div>
+                    <div style={styles.gridId}>ID: {bee.track_id}</div>
+                  </div>
+                ))}
               </div>
-              <div style={styles.finalLabel}>FINAL IDENTIFIED TAG</div>
-              
-              <div style={styles.finalStats}>
-                <div>Confidence: <strong>{(summary?.confidence * 100 || 0).toFixed(1)}%</strong></div>
-                <div>Method: <strong>{summary?.is_locked ? "Majority Vote (Locked)" : "Single Detection"}</strong></div>
-              </div>
-
-              <button onClick={reset} style={styles.finalBtn}>Analyze Another Video</button>
+              <button onClick={reset} style={styles.finalBtn}>New Session</button>
             </div>
           </div>
         )}
@@ -132,30 +118,32 @@ function App() {
 }
 
 const styles = {
-  container: { display: 'flex', height: '100vh', background: '#111', color: '#eee', fontFamily: 'Segoe UI, sans-serif' },
-  sidebar: { width: '280px', background: '#1a1a1a', padding: '30px', borderRight: '1px solid #333', display: 'flex', flexDirection: 'column' },
-  logo: { fontSize: '24px', fontWeight: 'bold', marginBottom: '40px', color: '#f1c40f', letterSpacing: '1px' },
-  stats: { flex: 1 },
-  statBox: { background: '#252525', padding: '20px', borderRadius: '10px', marginBottom: '15px', border: '1px solid #333' },
-  label: { display: 'block', fontSize: '12px', textTransform: 'uppercase', color: '#888', marginBottom: '8px' },
-  val: { fontSize: '32px', fontWeight: 'bold', display: 'block', lineHeight: '1' },
-  badge: { background: '#2ecc71', color: '#000', padding: '3px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 'bold', marginLeft: '10px' },
-  btnReset: { width: '100%', padding: '12px', background: 'transparent', border: '1px solid #ff4757', color: '#ff4757', cursor: 'pointer', borderRadius: '8px', fontWeight: 'bold', transition: 'all 0.2s' },
+  container: { display: 'flex', height: '100vh', background: '#111', color: '#eee', fontFamily: 'Segoe UI, sans-serif', overflow: 'hidden' },
+  sidebar: { width: '300px', background: '#1a1a1a', padding: '20px', borderRight: '1px solid #333', display: 'flex', flexDirection: 'column' },
+  logo: { fontSize: '24px', fontWeight: 'bold', marginBottom: '20px', color: '#f1c40f', letterSpacing: '1px' },
+  listHeader: { fontSize: '12px', textTransform: 'uppercase', color: '#888', marginBottom: '10px', borderBottom: '1px solid #333', paddingBottom: '5px' },
+  scrollArea: { flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' },
+  statusMsg: { color: '#666', fontStyle: 'italic', textAlign: 'center', marginTop: 20 },
+  beeCard: { background: '#252525', padding: '15px', borderRadius: '8px', border: '1px solid #333' },
+  cardHeader: { display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#888', marginBottom: '5px' },
+  badge: { background: '#f1c40f', color: '#000', padding: '2px 5px', borderRadius: '4px', fontWeight: 'bold' },
+  beeNum: { fontSize: '28px', fontWeight: 'bold', color: '#fff' },
+  confidence: { fontSize: '12px', color: '#aaa' },
+  btnReset: { marginTop: '20px', padding: '12px', background: 'transparent', border: '1px solid #444', color: '#eee', cursor: 'pointer', borderRadius: '8px' },
   main: { flex: 1, display: 'flex', justifyContent: 'center', alignItems: 'center', background: '#0a0a0a', position: 'relative' },
-  
-  upload: { textAlign: 'center', padding: '60px', border: '2px dashed #444', borderRadius: '15px', background: '#141414' },
-  btnUpload: { display: 'inline-block', marginTop: '20px', padding: '12px 30px', background: '#f1c40f', color: '#000', borderRadius: '30px', cursor: 'pointer', fontWeight: 'bold', fontSize: '16px' },
-  
-  videoBox: { border: '2px solid #333', borderRadius: '12px', overflow: 'hidden', boxShadow: '0 10px 30px rgba(0,0,0,0.5)', maxWidth: '90%' },
-  img: { display: 'block', maxWidth: '100%', maxHeight: '80vh' },
-
-  // Final Card Styles
-  finalCard: { background: '#1e1e1e', padding: '40px', borderRadius: '20px', boxShadow: '0 20px 60px rgba(0,0,0,0.8)', textAlign: 'center', border: '1px solid #f1c40f', minWidth: '400px', animation: 'fadeIn 0.5s ease' },
-  finalHeader: { fontSize: '18px', color: '#aaa', textTransform: 'uppercase', marginBottom: '20px', letterSpacing: '1px' },
-  finalBigNum: { fontSize: '80px', fontWeight: 'bold', color: '#f1c40f', lineHeight: '1', marginBottom: '10px' },
-  finalLabel: { fontSize: '14px', color: '#fff', fontWeight: 'bold', marginBottom: '30px' },
-  finalStats: { display: 'flex', justifyContent: 'space-between', background: '#252525', padding: '15px', borderRadius: '10px', fontSize: '14px', color: '#ccc', marginBottom: '30px' },
-  finalBtn: { width: '100%', padding: '15px', background: '#f1c40f', color: '#000', border: 'none', borderRadius: '10px', fontSize: '16px', fontWeight: 'bold', cursor: 'pointer' }
+  upload: { textAlign: 'center', padding: '60px', background: '#141414', borderRadius: '20px', border: '1px dashed #333' },
+  btnUpload: { display: 'inline-block', marginTop: '20px', padding: '12px 30px', background: '#f1c40f', color: '#000', borderRadius: '30px', cursor: 'pointer', fontWeight: 'bold' },
+  videoBox: { maxWidth: '90%', maxHeight: '90%', border: '2px solid #333', borderRadius: '10px', overflow: 'hidden' },
+  img: { display: 'block', width: '100%', maxHeight: '80vh' },
+  finalOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.9)', display: 'flex', justifyContent: 'center', alignItems: 'center' },
+  finalCard: { background: '#1e1e1e', padding: '40px', borderRadius: '20px', border: '1px solid #f1c40f', width: '500px', textAlign: 'center' },
+  finalHeader: { fontSize: '24px', marginBottom: '10px' },
+  finalSub: { color: '#888', marginBottom: '20px' },
+  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(80px, 1fr))', gap: '10px', marginBottom: '20px', maxHeight: '200px', overflowY: 'auto' },
+  gridItem: { background: '#252525', padding: '10px', borderRadius: '8px', border: '1px solid #444' },
+  gridNum: { fontSize: '20px', fontWeight: 'bold', color: '#f1c40f' },
+  gridId: { fontSize: '10px', color: '#666' },
+  finalBtn: { width: '100%', padding: '15px', background: '#f1c40f', color: '#000', border: 'none', borderRadius: '10px', fontWeight: 'bold', cursor: 'pointer' }
 };
 
 export default App;
