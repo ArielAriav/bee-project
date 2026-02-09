@@ -15,11 +15,14 @@ import config
 # --- INITIALIZATION ---
 print("--- Loading AI Models ---")
 GLOBAL_YOLO = YOLO(config.MODEL_PATH)
+# Initializing PaddleOCR with settings identical to the standalone script
 GLOBAL_PADDLE = PaddleOCR(
     lang="en",
     text_detection_model_name=None, 
     text_recognition_model_name="en_PP-OCRv5_mobile_rec",
     use_doc_orientation_classify=False,
+    use_doc_unwarping=config.USE_DOC_UNWARPING,
+    use_textline_orientation=config.USE_TEXTLINE_ORIENTATION,
     show_log=False
 )
 
@@ -94,7 +97,6 @@ async def get_result():
         active_bees = []
 
         for bee_id, bee_state in list(proc.bees.items()):
-           
             active_bees.append({
                 "track_id": int(bee_state.original_id),
                 "number": bee_state.locked_digit if bee_state.locked_digit else bee_state.current_num,
