@@ -4,6 +4,7 @@ import time
 import shutil
 import cv2
 import uuid
+import glob
 from fastapi import FastAPI, UploadFile, File, Query
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,7 +16,8 @@ import config
 # --- INITIALIZATION ---
 print("--- Loading AI Models ---")
 GLOBAL_YOLO = YOLO(config.MODEL_PATH)
-# Initializing PaddleOCR with settings identical to the standalone script
+
+# Initialize PaddleOCR with settings optimized for bee tag recognition
 GLOBAL_PADDLE = PaddleOCR(
     lang="en",
     text_detection_model_name=None, 
@@ -29,42 +31,66 @@ GLOBAL_PADDLE = PaddleOCR(
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=["*"], # Adjust this to your frontend URL in production
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# Shared state to track the active processing session
 active_session = {
     "id": None,
     "processor": None,
-    "is_finished": False
+    "is_finished": False,
+    "current_file": None
 }
+
+def cleanup_temporary_files():
+    """
+    Finds and deletes any leftover temporary video files 
+    from previous sessions to save disk space.
+    """
+    for temp_file in glob.glob("temp_*"):
+        try:
+            # We avoid deleting the file that is currently being processed
+            if active_session["current_file"] and temp_file in active_session["current_file"]:
+                continue
+            os.remove(temp_file)
+            print(f"Cleanup: Deleted legacy file {temp_file}")
+        except Exception as e:
+            print(f"Cleanup Error: Could not remove {temp_file} -> {e}")
 
 @app.post("/upload-video")
 async def upload(file: UploadFile = File(...)):
     global active_session
-    new_session_id = str(uuid.uuid4())
     
-    active_session["processor"] = BeeProcessor(GLOBAL_YOLO, GLOBAL_PADDLE)
-    active_session["id"] = new_session_id
-    active_session["is_finished"] = False
-
+    # Clean up old files before starting a new upload/detection session
+    cleanup_temporary_files()
+    
+    new_session_id = str(uuid.uuid4())
     filename = f"temp_{int(time.time())}_{file.filename}"
     temp_path = os.path.join(os.getcwd(), filename)
+
+    # Save the uploaded file locally
     with open(temp_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
     
+    # Initialize a fresh processor for this specific video
+    active_session["processor"] = BeeProcessor(GLOBAL_YOLO, GLOBAL_PADDLE)
+    active_session["id"] = new_session_id
+    active_session["is_finished"] = False
+    active_session["current_file"] = temp_path
+
     return {"filename": filename, "session_id": new_session_id}
 
 def frame_generator(path, session_id):
     cap = cv2.VideoCapture(path)
     try:
         while cap.isOpened():
-            if session_id != active_session["id"]: break
+            # Stop processing if a new session (new upload) has started
+            if session_id != active_session["id"]: 
+                break
+                
             ret, frame = cap.read()
             if not ret:
                 active_session["is_finished"] = True
@@ -72,16 +98,30 @@ def frame_generator(path, session_id):
             
             proc = active_session["processor"]
             annotated_frame, _ = proc.process_and_annotate(frame)
+            
+            # Encode frame as JPEG for streaming
             _, buffer = cv2.imencode('.jpg', annotated_frame)
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
     finally:
+        # Release the video file handle
         cap.release()
+        
+        # Automatically delete the video file once processing is done or interrupted
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+                print(f"Auto-Cleanup: Successfully removed {path}")
+            except Exception as e:
+                print(f"Auto-Cleanup Error: {e}")
 
 @app.get("/video-feed")
 async def video_feed(filename: str = Query(...), session_id: str = Query(...)):
     path = os.path.join(os.getcwd(), filename)
-    return StreamingResponse(frame_generator(path, session_id), media_type="multipart/x-mixed-replace; boundary=frame")
+    return StreamingResponse(
+        frame_generator(path, session_id), 
+        media_type="multipart/x-mixed-replace; boundary=frame"
+    )
 
 @app.get("/get-result")
 async def get_result():
@@ -95,7 +135,6 @@ async def get_result():
             }
 
         active_bees = []
-
         for bee_id, bee_state in list(proc.bees.items()):
             active_bees.append({
                 "track_id": int(bee_state.original_id),
@@ -104,6 +143,7 @@ async def get_result():
                 "confidence": float(bee_state.current_conf or 0.0)
             })
 
+        # Sort results: locked items first, then by confidence
         active_bees.sort(key=lambda x: (not x["is_locked"], -x["confidence"]))
 
         return {
@@ -113,7 +153,7 @@ async def get_result():
         }
 
     except Exception as e:
-        print(f"❌ ERROR in /get-result: {e}")
+        print(f"❌ API Error in /get-result: {e}")
         return JSONResponse(
             status_code=500,
             content={
@@ -126,4 +166,5 @@ async def get_result():
 
 if __name__ == "__main__":
     import uvicorn
+    # Start the server
     uvicorn.run(app, host="0.0.0.0", port=8000)
