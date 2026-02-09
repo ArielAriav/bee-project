@@ -27,3 +27,13 @@ __MACOSX/
 # Logs / temp
 *.log
 *.tmp
+
+# Node / React / Vite
+node_modules/
+frontend/node_modules/
+frontend/node_modules/.vite/
+frontend/.vite/
+frontend/dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
