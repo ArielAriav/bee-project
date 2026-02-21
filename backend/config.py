@@ -1,7 +1,10 @@
 # config.py
 
-MODEL_PATH = r"models\tag_detection\best.pt"
-VIDEO_PATH = r"data\raw\entrance\beeVideo.mp4"
+from pathlib import Path
+
+# בונה את הנתיב בצורה בטוחה שתעבוד בכל מערכת הפעלה
+MODEL_PATH = Path("models") / "tag_detection" / "best.pt"
+VIDEO_PATH = Path("data") / "raw" / "entrance" / "beeVideo.mp4"
 
 DET_CONF = 0.4
 PADDING = 6

@@ -12,13 +12,20 @@ from ultralytics import YOLO
 from paddleocr import PaddleOCR
 from processor import BeeProcessor
 import config
+import torch
 
 # --- INITIALIZATION ---
 print("--- Loading AI Models ---")
 GLOBAL_YOLO = YOLO(config.MODEL_PATH)
+if torch.backends.mps.is_available():
+    print("✅ Mac GPU (MPS) is available! Moving YOLO to GPU.")
+    GLOBAL_YOLO.to('mps')
+else:
+    print("⚠️ MPS not available. YOLO will run on CPU.")
 
 # Initialize PaddleOCR with settings optimized for bee tag recognition
 GLOBAL_PADDLE = PaddleOCR(
+    use_gpu=True,
     lang="en",
     text_detection_model_name=None, 
     text_recognition_model_name="en_PP-OCRv5_mobile_rec",
