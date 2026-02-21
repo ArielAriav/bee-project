@@ -5,35 +5,42 @@ import shutil
 import cv2
 import uuid
 import glob
+import platform
+import torch
 from fastapi import FastAPI, UploadFile, File, Query
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from ultralytics import YOLO
-from paddleocr import PaddleOCR
 from processor import BeeProcessor
 import config
-import torch
 
 # --- INITIALIZATION ---
 print("--- Loading AI Models ---")
-GLOBAL_YOLO = YOLO(config.MODEL_PATH)
-if torch.backends.mps.is_available():
-    print("✅ Mac GPU (MPS) is available! Moving YOLO to GPU.")
-    GLOBAL_YOLO.to('mps')
-else:
-    print("⚠️ MPS not available. YOLO will run on CPU.")
+IS_MAC = platform.system() == 'Darwin'
 
-# Initialize PaddleOCR with settings optimized for bee tag recognition
-GLOBAL_PADDLE = PaddleOCR(
-    use_gpu=True,
-    lang="en",
-    text_detection_model_name=None, 
-    text_recognition_model_name="en_PP-OCRv5_mobile_rec",
-    use_doc_orientation_classify=False,
-    use_doc_unwarping=config.USE_DOC_UNWARPING,
-    use_textline_orientation=config.USE_TEXTLINE_ORIENTATION,
-    show_log=False
-)
+GLOBAL_YOLO = YOLO(config.MODEL_PATH)
+
+if IS_MAC:
+    print("✅ macOS detected! Using Apple Vision Framework for OCR and MPS for YOLO.")
+    GLOBAL_YOLO.to('mps')
+    GLOBAL_PADDLE = None # לא טוענים את PaddleOCR במק
+else:
+    from paddleocr import PaddleOCR
+    print("✅ Windows/Linux detected! Using PaddleOCR.")
+    DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+    GLOBAL_YOLO.to(DEVICE)
+    
+    GLOBAL_PADDLE = PaddleOCR(
+        use_gpu=torch.cuda.is_available(),
+        lang="en",
+        text_detection_model_name=None, 
+        text_recognition_model_name="en_PP-OCRv5_mobile_rec",
+        use_doc_orientation_classify=False,
+        use_doc_unwarping=getattr(config, "USE_DOC_UNWARPING", False),
+        use_textline_orientation=getattr(config, "USE_TEXTLINE_ORIENTATION", False),
+        show_log=False
+    )
+
 
 app = FastAPI()
 app.add_middleware(

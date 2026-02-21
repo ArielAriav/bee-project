@@ -5,6 +5,36 @@ import numpy as np
 from collections import deque, Counter, defaultdict
 import config
 
+import platform
+
+IS_MAC = platform.system() == 'Darwin'
+
+if IS_MAC:
+    import Vision
+    from Foundation import NSData
+
+    def run_apple_vision_ocr(img_bgr):
+        # המרה מהירה של התמונה לפורמט שאפל יודעת לקרוא
+        success, buffer = cv2.imencode('.jpg', img_bgr)
+        if not success: return []
+        
+        ns_data = NSData.dataWithBytes_length_(buffer.tobytes(), len(buffer.tobytes()))
+        request = Vision.VNRecognizeTextRequest.alloc().init()
+        request.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
+        
+        handler = Vision.VNImageRequestHandler.alloc().initWithData_options_(ns_data, None)
+        success, _ = handler.performRequests_error_([request], None)
+        
+        results = []
+        if success:
+            for obs in request.results():
+                candidate = obs.topCandidates_(1)[0]
+                results.append((candidate.string(), candidate.confidence()))
+        return results
+
+
+
+
 class BeeState:
     def __init__(self, track_id, initial_pos):
         self.original_id = track_id
@@ -73,28 +103,53 @@ class BeeProcessor:
 
         for angle in [0, 90, 180, 270]:
             rotated = self.rotate_image(processed, angle)
-            try:
-                res = self.paddle_ocr.ocr(rotated, det=False, cls=False)
-                if not res or not res[0]: continue
+            
+            if IS_MAC:
+                # --- Apple Vision Framework Path (Mac) ---
+                try:
+                    res = run_apple_vision_ocr(rotated)
+                    for raw_text, conf in res:
+                        t = str(raw_text).strip().replace(" ", "")
+                        t = t.replace("I", "1").replace("l", "1").replace("|", "1")
+                        t = t.replace("O", "0").replace("o", "0").replace("S", "5")
 
-                for line in res[0]:
-                    raw_text, conf = line[0], line[1]
-                    t = str(raw_text).strip().replace(" ", "")
-                    # Visual normalization
-                    t = t.replace("I", "1").replace("l", "1").replace("|", "1")
-                    t = t.replace("O", "0").replace("o", "0").replace("S", "5")
+                        nums = _digit_re.findall(t)
+                        if not nums: continue
+                        
+                        cand = "".join(nums)
+                        if not (1 <= len(cand) <= getattr(config, "MAX_DIGITS", 3)): continue
 
-                    nums = _digit_re.findall(t)
-                    if not nums: continue
+                        if conf > best_conf:
+                            best_conf = conf
+                            best_text = cand
+                except Exception as e:
+                    print(f"Apple Vision OCR Error: {e}")
+                    continue
+
+            else:
+                # --- PaddleOCR Path (Windows/CUDA) ---
+                try:
+                    res = self.paddle_ocr.ocr(rotated, det=False, cls=False)
+                    if not res or not res[0]: continue
+
+                    for line in res[0]:
+                        raw_text, conf = line[0], line[1]
+                        t = str(raw_text).strip().replace(" ", "")
+                        t = t.replace("I", "1").replace("l", "1").replace("|", "1")
+                        t = t.replace("O", "0").replace("o", "0").replace("S", "5")
+
+                        nums = _digit_re.findall(t)
+                        if not nums: continue
+                        
+                        cand = "".join(nums)
+                        if not (1 <= len(cand) <= getattr(config, "MAX_DIGITS", 3)): continue
+
+                        if conf > best_conf:
+                            best_conf = conf
+                            best_text = cand
+                except:
+                    continue
                     
-                    cand = "".join(nums)
-                    if not (1 <= len(cand) <= getattr(config, "MAX_DIGITS", 3)): continue
-
-                    if conf > best_conf:
-                        best_conf = conf
-                        best_text = cand
-            except:
-                continue
         return best_text, best_conf
 
     def vote_number(self, hist):
@@ -112,7 +167,7 @@ class BeeProcessor:
     def process_and_annotate(self, frame):
         self.frame_idx += 1
         annotated = frame.copy()
-        results = self.model.track(frame, conf=config.DET_CONF, persist=True, verbose=False)
+        results = self.model.track(frame, conf=config.DET_CONF, persist=True, verbose=False, imgsz=1024)
         current_yolo_ids = set()
         
         if results and results[0].boxes and results[0].boxes.id is not None:
@@ -150,6 +205,7 @@ class BeeProcessor:
                         p = config.PADDING
                         h_f, w_f = frame.shape[:2]
                         crop = frame[max(0, y1-p):min(h_f-1, y2+p), max(0, x1-p):min(w_f-1, x2+p)]
+                        #cv2.imwrite(f"debug_crop_{self.frame_idx}_{yolo_id}.jpg", crop)
                         num, ocr_c = self.read_digits(crop)
                         
                         if num is not None and ocr_c >= config.MIN_ACCEPT_CONF:
