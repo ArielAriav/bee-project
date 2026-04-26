@@ -1,11 +1,11 @@
 from pathlib import Path
 import shutil
 
-SRC_DIR = Path("data/frames/beeVideo") # Change the video name here
-DST_DIR = Path("data/frames_subset/beeVideo") # Change the video name here
+SRC_DIR = Path("data/frames/beeVideo12") # Change the video name here
+DST_DIR = Path("data/frames_subset/beeVideo12") # Change the video name here
 DST_DIR.mkdir(parents=True, exist_ok=True)
 
-TARGET = 250
+TARGET = 70
 
 def main():
     imgs = sorted(SRC_DIR.glob("*.jpg"))

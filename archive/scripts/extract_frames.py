@@ -1,13 +1,13 @@
 import cv2
 from pathlib import Path
 
-VIDEO_PATH = Path("data/raw/entrance/beeVideo.mp4") # Change the video name here
-OUT_DIR = Path("data/frames/beeVideo") # Change the video name here
+VIDEO_PATH = Path("data/raw/entrance/beeVideo12.mp4") # Change the video name here
+OUT_DIR = Path("data/frames/beeVideo12") # Change the video name here
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Every few frames save one imageת
-# Save 1 out of every 5 frames
-EVERY_N_FRAMES = 5
+# Save 1 out of every 60 frames
+EVERY_N_FRAMES = 60
 
 # Limit to not produce too many images the first time
 MAX_SAVED = 800
