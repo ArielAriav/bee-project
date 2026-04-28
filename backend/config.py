@@ -1,9 +1,9 @@
 # config.py
 
 MODEL_PATH = r"models\tag_detection\best.pt"
-VIDEO_PATH = r"data\raw\entrance\beeVideo.mp4"
+DIGIT_MODEL_PATH = r"models\number_detection\best.pt"
 
-DET_CONF = 0.4
+DET_CONF = 0.3
 PADDING = 6
 UPSCALE = 3 
 MAX_DIGITS = 3
@@ -18,7 +18,7 @@ USE_DOC_UNWARPING = False
 USE_TEXTLINE_ORIENTATION = False
 
 # Locking Logic
-LOCK_COUNT = 8 # Number of appearances needed to lock a number
+LOCK_COUNT = 10 # Number of appearances needed to lock a number
 MIN_ACCEPT_CONF = 0.45
 
 BLUR_MIN_LOCK = 40
