@@ -15,13 +15,15 @@ class BeeState:
         self.last_center = initial_pos
         self.frames_lost = 0
         self.is_active = True
-        self.recent_digits = deque(maxlen=30)
+        self.recent_digits = deque(maxlen=60)
         self.locked_digit = None
         self.current_num = None
         self.current_conf = 0.0
         self.motion_history = deque(maxlen=10)
         self.direction_votes = Counter()
         self.locked_direction = None
+        self.current_num_peak_conf = 0.0
+        self.stable_count = 0  # counts consecutive frames where current_num didn't change
 
     def update_pos(self, pos, yolo_id):
         self.last_center = pos
@@ -59,26 +61,6 @@ class BeeState:
 
         return "ltr" if delta > 0 else "rtl"
     
-    @property
-    def dominant_axis(self):
-        """
-        Returns whether the bee moves more horizontally or vertically.
-        Diagonal movement biases digit reading — we only care about
-        the horizontal component for direction.
-        """
-        if len(self.motion_history) < 3:
-            return None
-    
-        # compare total horizontal vs vertical displacement
-        # (requires storing Y as well — see note below)
-        h_delta = abs(self.motion_history_x[-1] - self.motion_history_x[0])
-        v_delta = abs(self.motion_history_y[-1] - self.motion_history_y[0])
-    
-        if h_delta < 5 and v_delta < 5:
-            return None  # stationary
-    
-        return "horizontal" if h_delta >= v_delta else "vertical"
-
 class BeeProcessor:
     def __init__(self, yolo_instance, digit_model_instance):
         """
@@ -88,6 +70,23 @@ class BeeProcessor:
         self.digit_model = digit_model_instance
         self.frame_idx = 0
         self.bees = {} 
+
+    def find_nearby_bee(self, cx, cy, new_id, max_dist=80):
+        """
+        Looks for an existing bee near the given position.
+        If found, it means YOLO assigned a new ID to an already-known bee.
+        Returns the existing BeeState or None.
+        """
+        for existing_id, bee in self.bees.items():
+            if existing_id == new_id:
+                continue
+            if not bee.is_active:
+                continue
+            ex, ey = bee.last_center
+            dist = ((cx - ex) ** 2 + (cy - ey) ** 2) ** 0.5
+            if dist < max_dist:
+                return existing_id, bee
+        return None, None
 
     def read_digits(self, crop, bee: BeeState):
         """
@@ -149,16 +148,24 @@ class BeeProcessor:
                 current_yolo_ids.add(track_id)
                 x1, y1, x2, y2 = box
                 cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-                
-                # Bee Lifecycle Management
+
                 if track_id not in self.bees:
-                    self.bees[track_id] = BeeState(track_id, (cx, cy))
-                
+                    # check if this is a known bee that got a new YOLO ID
+                    existing_id, existing_bee = self.find_nearby_bee(cx, cy, track_id)
+                    if existing_bee is not None:
+                        # reuse the existing state under the new ID
+                        self.bees[track_id] = existing_bee
+                        self.bees[track_id].yolo_id = track_id
+                        # remove old ID to avoid duplicates
+                        del self.bees[existing_id]
+                    else:
+                        self.bees[track_id] = BeeState(track_id, (cx, cy))
+
                 bee = self.bees[track_id]
                 bee.update_pos((cx, cy), track_id)
                 
                 # 2. Digit Detection (every N frames)
-                if self.frame_idx % config.OCR_EVERY == 0:
+                if self.frame_idx % config.OCR_EVERY == 0 and bee.locked_digit is None:
                     crop = frame[max(0,y1):min(frame.shape[0],y2), max(0,x1):min(frame.shape[1],x2)]
                     # pass bee so read_digits can apply direction-aware digit ordering
                     res_str, res_conf = self.read_digits(crop, bee)
@@ -169,29 +176,42 @@ class BeeProcessor:
                         if bee.moving_direction == "rtl":
                             canonical = res_str[::-1]
                         bee.recent_digits.append(canonical)
-                        
-                        # Number Confirmation (Locking)
+
                         counts = Counter(bee.recent_digits)
-                        top_num, freq = counts.most_common(1)[0]
-                        if freq >= getattr(config, "LOCK_COUNT", 8):
-                            bee.locked_digit = top_num
-                        
-                        # always store the raw result for confidence tracking
+                        best_num, best_freq = counts.most_common(1)[0]
+
+                        # --- Display logic ---
+                        if bee.current_num is None:
+                            bee.current_num = best_num
+                            bee.current_num_peak_conf = res_conf
+                            bee.stable_count = 1
+
+                        elif canonical == bee.current_num:
+                            # same number — strengthen
+                            bee.current_num_peak_conf = max(bee.current_num_peak_conf, res_conf)
+                            bee.stable_count += 1
+
+                        elif (best_num != bee.current_num
+                                and best_freq >= 5
+                                and res_conf > bee.current_num_peak_conf):
+                            # switch — reset stability counter
+                            bee.current_num = best_num
+                            bee.current_num_peak_conf = res_conf
+                            bee.stable_count = 1  # reset! must re-earn stability
+
                         bee.current_conf = res_conf
 
-                        # display the most voted number so far, not the latest guess
-                        counts = Counter(bee.recent_digits)
-                        if counts:
-                            bee.current_num = counts.most_common(1)[0][0]
-                        else:
-                            bee.current_num = res_str
+                        # --- Locking logic ---
+                        # lock only after current_num has been stable for LOCK_COUNT consecutive readings
+                        if bee.stable_count >= config.LOCK_COUNT:
+                            bee.locked_digit = bee.current_num
 
                 # 3. UI Drawing
                 color = (0, 215, 255) if bee.locked_digit else (0, 255, 0)
                 cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
                 display_num = bee.locked_digit or bee.current_num or ""
-                label = f"ID:{track_id} | #{display_num}"
+                label = f"ID:{bee.original_id} | #{display_num}"
                 cv2.putText(annotated, label, (x1, max(y1-10, 20)), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
 
         return annotated
