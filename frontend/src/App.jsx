@@ -6,6 +6,7 @@ function App() {
   const [status, setStatus] = useState('idle');
   const [bees, setBees] = useState([]); 
   const [videoUrl, setVideoUrl] = useState(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
 
   useEffect(() => {
     let interval;
@@ -39,7 +40,17 @@ function App() {
     formData.append("file", file);
 
     try {
-      const res = await axios.post("http://localhost:8000/upload-video", formData);
+      setStatus('uploading');
+      const res = await axios.post("http://localhost:8000/upload-video", formData, {
+        onUploadProgress: (progressEvent) => {
+          const percent = Math.round(
+              (progressEvent.loaded * 100) / progressEvent.total
+          );
+          setUploadProgress(percent);
+        }
+      });
+      setUploadProgress(0);
+      setStatus('processing');
       setVideoUrl(`http://localhost:8000/video-feed?filename=${res.data.filename}&session_id=${res.data.session_id}`);
       setStatus('processing');
     } catch (e) { alert("Upload failed"); }
@@ -95,6 +106,19 @@ function App() {
           </div>
         )}
 
+        {status === 'uploading' && (
+          <div style={styles.upload}>
+            <h2 style={{ marginTop: 0 }}>Uploading video...</h2>
+            <div style={styles.progressBar}>
+              <div style={{
+                  ...styles.progressFill,
+                  width: `${uploadProgress}%`
+              }} />
+            </div>
+            <p style={{ color: '#888' }}>{uploadProgress}%</p>
+          </div>
+        )}
+
         {status === 'finished' && (
           <div style={styles.finalOverlay}>
             <div style={styles.finalCard}>
@@ -143,7 +167,9 @@ const styles = {
   gridItem: { background: '#252525', padding: '10px', borderRadius: '8px', border: '1px solid #444' },
   gridNum: { fontSize: '20px', fontWeight: 'bold', color: '#f1c40f' },
   gridId: { fontSize: '10px', color: '#666' },
-  finalBtn: { width: '100%', padding: '15px', background: '#f1c40f', color: '#000', border: 'none', borderRadius: '10px', fontWeight: 'bold', cursor: 'pointer' }
+  finalBtn: { width: '100%', padding: '15px', background: '#f1c40f', color: '#000', border: 'none', borderRadius: '10px', fontWeight: 'bold', cursor: 'pointer' },
+  progressBar: { width: '300px', height: '8px', background: '#333', borderRadius: '4px', overflow: 'hidden', margin: '20px auto' },
+progressFill: { height: '100%', background: '#f1c40f', borderRadius: '4px', transition: 'width 0.3s ease' },
 };
 
 export default App;
