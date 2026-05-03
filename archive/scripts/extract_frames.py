@@ -1,8 +1,8 @@
 import cv2
 from pathlib import Path
 
-VIDEO_PATH = Path("data/raw/entrance/beeVideo12.mp4") # Change the video name here
-OUT_DIR = Path("data/frames/beeVideo12") # Change the video name here
+VIDEO_PATH = Path("data/raw/entrance_valid/video_for_vaild_2.mp4") # Change the video name here
+OUT_DIR = Path("data/frames/video_for_vaild_2") # Change the video name here
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Every few frames save one imageת
