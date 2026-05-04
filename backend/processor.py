@@ -22,7 +22,7 @@ class BeeState:
         self.current_conf = 0.0
         self.current_num_peak_conf = 0.0
         self.stable_count = 0
-        self.current_direction = "Up" # נשמור את הכיוון האחרון שזוהה לתצוגה אם תרצה
+        self.current_direction = "Up" # stores the last detected direction for display
 
     def update_pos(self, pos, yolo_id):
         self.last_center = pos
@@ -63,21 +63,21 @@ class BeeProcessor:
         if crop is None or crop.size == 0:
             return None, 0.0
 
-        # --- סיבוב התמונה בהתאם לכיוון שזוהה ---
+        # --- Rotate the crop according to the detected direction ---
         rotated_crop = crop
-        
+
         if direction == "Down":
-            # מסובב 180 מעלות
+            # rotate 180 degrees
             rotated_crop = cv2.rotate(crop, cv2.ROTATE_180)
         elif direction == "Left":
-            # מסובב 90 מעלות עם כיוון השעון 
-            # (אם התגית מודבקת אחרת, יכול להיות שתצטרך לשנות ל-ROTATE_90_COUNTERCLOCKWISE)
+            # rotate 90 degrees clockwise
+            # (if the tag is attached differently, may need ROTATE_90_COUNTERCLOCKWISE)
             rotated_crop = cv2.rotate(crop, cv2.ROTATE_90_CLOCKWISE)
         elif direction == "Right":
-            # מסובב 90 מעלות נגד כיוון השעון
+            # rotate 90 degrees counter-clockwise
             rotated_crop = cv2.rotate(crop, cv2.ROTATE_90_COUNTERCLOCKWISE)
 
-        # שולחים את התמונה המסובבת (והישרה!) למודל
+        # send the rotated (upright) crop to the model
         results = self.digit_model.predict(rotated_crop, conf=0.25, verbose=False)
         detected = []
 
@@ -91,17 +91,16 @@ class BeeProcessor:
             x_spread = max(x_coords) - min(x_coords)
             y_spread = max(y_coords) - min(y_coords)
 
-            # מכיוון שהתמונה עכשיו מיושרת, הספרות תמיד מסודרות לרוחב (אופקית)
+            # since the image is now upright, digits are always arranged horizontally
             if x_spread >= y_spread:
                 detected.sort(key=lambda x: x[0])
             else:
-                detected.sort(key=lambda x: x[2]) 
+                detected.sort(key=lambda x: x[2])
 
             digit_str = "".join([str(d[1]) for d in detected])
             avg_conf = sum([d[2] for d in detected]) / len(detected)
 
-            # מחקנו את קוד היפוך המחרוזת (digit_str[::-1]) כי עכשיו התמונה מיושרת 
-            # והמודל תמיד קורא אותה נכון משמאל לימין!
+            # string reversal (digit_str[::-1]) removed — image is upright so model always reads left to right
 
             return digit_str, avg_conf
 
@@ -135,25 +134,24 @@ class BeeProcessor:
                 bee = self.bees[track_id]
                 bee.update_pos((cx, cy), track_id)
                 
-                # אנחנו נבדוק את הדברים כל config.OCR_EVERY פריימים (כדי לא להכביד על המעבד),
-                # אבל בלי קשר להאם המספר ננעל או לא!
+                # run every OCR_EVERY frames to reduce CPU load, regardless of lock state
                 if self.frame_idx % config.OCR_EVERY == 0:
-                    
-                    # 1. יצירת החיתוך המורחב לטובת זיהוי הכיוון
+
+                    # 1. create expanded crop for direction detection
                     ey1 = max(0, y1 - config.CROP_EXPAND)
                     ey2 = min(frame.shape[0], y2 + config.CROP_EXPAND)
                     ex1 = max(0, x1 - config.CROP_EXPAND)
                     ex2 = min(frame.shape[1], x2 + config.CROP_EXPAND)
                     expanded_crop = frame[ey1:ey2, ex1:ex2]
                     
-                    # 2. זיהוי כיוון - רץ תמיד ומעדכן את המצב של הדבורה!
+                    # 2. direction detection — always runs and updates the bee state
                     if expanded_crop is not None and expanded_crop.size > 0:
                         angle_results = self.angle_model.predict(expanded_crop, verbose=False)
                         if angle_results:
                             top_class_index = angle_results[0].probs.top1
                             bee.current_direction = angle_results[0].names[top_class_index]
 
-                    # 3. חיתוך רגיל וזיהוי ספרות (OCR) - רץ *רק* אם עדיין לא ננעלנו על המספר
+                    # 3. standard crop and digit OCR — runs only if number is not yet locked
                     if bee.locked_digit is None:
                         crop = frame[max(0,y1):min(frame.shape[0],y2), max(0,x1):min(frame.shape[1],x2)]
                         res_str, res_conf = self.read_digits(crop, bee.current_direction)
