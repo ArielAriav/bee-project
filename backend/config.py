@@ -1,7 +1,10 @@
 # config.py
+import os
 
-MODEL_PATH = r"models\tag_detection\best.pt"
-DIGIT_MODEL_PATH = r"models\number_detection\best.pt"
+# Using os.path.join for cross-platform compatibility (Windows & Mac)
+MODEL_PATH = os.path.join("models", "tag_detection", "best.pt")
+DIGIT_MODEL_PATH = os.path.join("models", "number_detection", "best.pt")
+ANGLE_MODEL_PATH = os.path.join("models", "angle_detection", "best.pt")
 
 DET_CONF = 0.5
 PADDING = 6
@@ -42,3 +45,9 @@ OCR_PARAMS = dict(
 )
 
 COLOR = (0, 0, 255)
+
+# --- Data Collection for Angle Model ---
+CROP_EXPAND = 50
+SAVE_CROPS_DIR = "angleModelData"
+
+REVERSE_DIRECTIONS = ["Left", "Down"]

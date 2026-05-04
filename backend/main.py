@@ -17,6 +17,7 @@ print("--- Loading AI Models ---")
 # Load both YOLO models globally
 GLOBAL_YOLO_TAG = YOLO(config.MODEL_PATH)
 GLOBAL_YOLO_DIGITS = YOLO(config.DIGIT_MODEL_PATH)
+GLOBAL_YOLO_ANGLE = YOLO(config.ANGLE_MODEL_PATH)
 
 app = FastAPI()
 
@@ -61,8 +62,8 @@ async def upload(file: UploadFile = File(...)):
     with open(temp_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
     
-    # Initialize processor with BOTH models
-    active_session["processor"] = BeeProcessor(GLOBAL_YOLO_TAG, GLOBAL_YOLO_DIGITS)
+    # Initialize processor with ALL THREE models
+    active_session["processor"] = BeeProcessor(GLOBAL_YOLO_TAG, GLOBAL_YOLO_DIGITS, GLOBAL_YOLO_ANGLE)
     active_session["id"] = new_session_id
     active_session["is_finished"] = False
     active_session["current_file"] = temp_path
