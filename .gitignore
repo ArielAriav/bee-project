@@ -11,10 +11,7 @@ runs/
 .yolo/
 
 # Data (generated / large)
-data/raw/
-data/processed/
-data/frames/
-data/frames_subset/
+raw_data/
 
 # Datasets (Roboflow / YOLO exports)
 datasets/
