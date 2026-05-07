@@ -22,13 +22,31 @@ class BeeState:
         self.current_conf = 0.0
         self.current_num_peak_conf = 0.0
         self.stable_count = 0
-        self.current_direction = "Up" # stores the last detected direction for display
+        self.current_direction = "Up"
+        self.velocity = (0, 0)  # NEW: estimated velocity based on last two positions
+        self.prev_center = initial_pos  # NEW: previous center for velocity calculation
 
     def update_pos(self, pos, yolo_id):
+        # NEW: calculate velocity from last known position before updating
+        self.velocity = (
+            pos[0] - self.last_center[0],
+            pos[1] - self.last_center[1]
+        )
+        self.prev_center = self.last_center
         self.last_center = pos
         self.yolo_id = yolo_id
         self.frames_lost = 0
         self.is_active = True
+
+    @property
+    def predicted_next_pos(self):
+        """
+        Predicts where this bee will be in the next frame based on current velocity.
+        """
+        return (
+            self.last_center[0] + self.velocity[0],
+            self.last_center[1] + self.velocity[1]
+        )
 
 class BeeProcessor:
     def __init__(self, yolo_instance, digit_model_instance, angle_model_instance):
@@ -41,17 +59,29 @@ class BeeProcessor:
         self.frame_idx = 0
         self.bees = {}
 
-        os.makedirs(config.SAVE_CROPS_DIR, exist_ok=True) 
+        os.makedirs(config.SAVE_CROPS_DIR, exist_ok=True)
 
-    def find_nearby_bee(self, cx, cy, new_id, max_dist=80):
+    def find_nearby_bee(self, cx, cy, new_id, max_dist=120):
+        """
+        Looks for an existing bee near the given position.
+        Checks both current position and predicted next position to handle fast-moving bees.
+        """
         for existing_id, bee in self.bees.items():
             if existing_id == new_id:
                 continue
             if not bee.is_active:
                 continue
+
             ex, ey = bee.last_center
-            dist = ((cx - ex) ** 2 + (cy - ey) ** 2) ** 0.5
-            if dist < max_dist:
+            px, py = bee.predicted_next_pos
+
+            # distance to current position
+            dist_current = ((cx - ex) ** 2 + (cy - ey) ** 2) ** 0.5
+            # distance to predicted next position
+            dist_predicted = ((cx - px) ** 2 + (cy - py) ** 2) ** 0.5
+
+            # match if either distance is within threshold
+            if min(dist_current, dist_predicted) < max_dist:
                 return existing_id, bee
         return None, None
 
@@ -63,7 +93,7 @@ class BeeProcessor:
         if crop is None or crop.size == 0:
             return None, 0.0
 
-        # --- Rotate the crop according to the detected direction ---
+        # rotate the crop according to the detected direction
         rotated_crop = crop
 
         if direction == "Down":
@@ -71,13 +101,12 @@ class BeeProcessor:
             rotated_crop = cv2.rotate(crop, cv2.ROTATE_180)
         elif direction == "Left":
             # rotate 90 degrees clockwise
-            # (if the tag is attached differently, may need ROTATE_90_COUNTERCLOCKWISE)
             rotated_crop = cv2.rotate(crop, cv2.ROTATE_90_CLOCKWISE)
         elif direction == "Right":
             # rotate 90 degrees counter-clockwise
             rotated_crop = cv2.rotate(crop, cv2.ROTATE_90_COUNTERCLOCKWISE)
 
-        # send the rotated (upright) crop to the model
+        # send the rotated (upright) crop to the digit model
         results = self.digit_model.predict(rotated_crop, conf=0.25, verbose=False)
         detected = []
 
@@ -100,7 +129,7 @@ class BeeProcessor:
             digit_str = "".join([str(d[1]) for d in detected])
             avg_conf = sum([d[2] for d in detected]) / len(detected)
 
-            # string reversal (digit_str[::-1]) removed — image is upright so model always reads left to right
+            # string reversal removed — image is upright so model always reads left to right
 
             return digit_str, avg_conf
 
@@ -109,14 +138,14 @@ class BeeProcessor:
     def process_and_annotate(self, frame):
         self.frame_idx += 1
         annotated = frame.copy()
-        
+
         results = self.model.track(frame, conf=config.DET_CONF, persist=True, verbose=False)
         current_yolo_ids = set()
 
         if results and results[0].boxes and results[0].boxes.id is not None:
             boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
             ids = results[0].boxes.id.cpu().numpy().astype(int)
-            
+
             for box, track_id in zip(boxes, ids):
                 current_yolo_ids.add(track_id)
                 x1, y1, x2, y2 = box
@@ -125,6 +154,7 @@ class BeeProcessor:
                 if track_id not in self.bees:
                     existing_id, existing_bee = self.find_nearby_bee(cx, cy, track_id)
                     if existing_bee is not None:
+                        # reuse the existing state under the new ID
                         self.bees[track_id] = existing_bee
                         self.bees[track_id].yolo_id = track_id
                         del self.bees[existing_id]
@@ -133,7 +163,7 @@ class BeeProcessor:
 
                 bee = self.bees[track_id]
                 bee.update_pos((cx, cy), track_id)
-                
+
                 # run every OCR_EVERY frames to reduce CPU load, regardless of lock state
                 if self.frame_idx % config.OCR_EVERY == 0:
 
@@ -143,7 +173,7 @@ class BeeProcessor:
                     ex1 = max(0, x1 - config.CROP_EXPAND)
                     ex2 = min(frame.shape[1], x2 + config.CROP_EXPAND)
                     expanded_crop = frame[ey1:ey2, ex1:ex2]
-                    
+
                     # 2. direction detection — always runs and updates the bee state
                     if expanded_crop is not None and expanded_crop.size > 0:
                         angle_results = self.angle_model.predict(expanded_crop, verbose=False)
@@ -155,7 +185,7 @@ class BeeProcessor:
                     if bee.locked_digit is None:
                         crop = frame[max(0,y1):min(frame.shape[0],y2), max(0,x1):min(frame.shape[1],x2)]
                         res_str, res_conf = self.read_digits(crop, bee.current_direction)
-                        
+
                         if res_str and 1 <= len(res_str) <= config.MAX_DIGITS:
                             bee.recent_digits.append(res_str)
                             counts = Counter(bee.recent_digits)
@@ -183,7 +213,7 @@ class BeeProcessor:
                 cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
                 display_num = bee.locked_digit or bee.current_num or ""
                 label = f"ID:{bee.original_id} | #{display_num} | {bee.current_direction}"
-                cv2.putText(annotated, label, (x1, max(y1-10, 20)), 
+                cv2.putText(annotated, label, (x1, max(y1-10, 20)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
         return annotated

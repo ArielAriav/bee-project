@@ -13,7 +13,7 @@ function App() {
     if (status === 'processing') {
       interval = setInterval(async () => {
         try {
-          const res = await axios.get("http://localhost:8000/get-result");
+          const res = await axios.get("http://178.63.89.118:8000/get-result");
           if (res.data.bees) {
             setBees(res.data.bees);
           }
@@ -41,7 +41,7 @@ function App() {
 
     try {
       setStatus('uploading');
-      const res = await axios.post("http://localhost:8000/upload-video", formData, {
+      const res = await axios.post("http://178.63.89.118:8000/upload-video", formData, {
         onUploadProgress: (progressEvent) => {
           const percent = Math.round(
               (progressEvent.loaded * 100) / progressEvent.total
@@ -51,7 +51,7 @@ function App() {
       });
       setUploadProgress(0);
       setStatus('processing');
-      setVideoUrl(`http://localhost:8000/video-feed?filename=${res.data.filename}&session_id=${res.data.session_id}`);
+      setVideoUrl(`http://178.63.89.118:8000/video-feed?filename=${res.data.filename}&session_id=${res.data.session_id}`);
       setStatus('processing');
     } catch (e) { alert("Upload failed"); }
   };
