@@ -11,7 +11,6 @@ class BeeState:
     Internal state for a single bee tracking instance.
     """
     def __init__(self, track_id, initial_pos):
-        self.original_id = track_id
         self.yolo_id = track_id
         self.last_center = initial_pos
         self.frames_lost = 0
@@ -25,6 +24,7 @@ class BeeState:
         self.current_direction = "Up"
         self.velocity = (0, 0)  # NEW: estimated velocity based on last two positions
         self.prev_center = initial_pos  # NEW: previous center for velocity calculation
+        self.original_id = None  # unknown until locked
 
     def update_pos(self, pos, yolo_id):
         # NEW: calculate velocity from last known position before updating
@@ -208,11 +208,33 @@ class BeeProcessor:
                             if bee.stable_count >= config.LOCK_COUNT:
                                 bee.locked_digit = bee.current_num
 
+                                # NEW: assign the locked number as the bee's ID
+                                locked_num = bee.current_num
+
+                                # check if another bee with this number already exists
+                                duplicate_id = None
+                                for existing_id, existing_bee in list(self.bees.items()):
+                                    if existing_bee is bee:
+                                        continue  # skip self
+                                    if existing_bee.original_id == locked_num:
+                                        # same number already exists — this is the same bee re-entered
+                                        duplicate_id = existing_id
+                                        break
+
+                                if duplicate_id is not None:
+                                    # merge: keep the existing bee, discard this one
+                                    del self.bees[track_id]
+                                    # no need to continue drawing for this track
+                                    continue
+                                else:
+                                    # new bee — assign ID = locked number
+                                    bee.original_id = locked_num
+
                 # UI Drawing
                 color = (0, 215, 255) if bee.locked_digit else (0, 255, 0)
                 cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
                 display_num = bee.locked_digit or bee.current_num or ""
-                label = f"ID:{bee.original_id} | #{display_num} | {bee.current_direction}"
+                label = f"#{display_num} | {bee.current_direction}"
                 cv2.putText(annotated, label, (x1, max(y1-10, 20)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 

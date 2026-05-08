@@ -125,10 +125,12 @@ async def get_result():
 
         active_bees = []
         for bee_id, bee_state in list(proc.bees.items()):
+            if bee_state.original_id is None:
+                continue
             active_bees.append({
                 "track_id": int(bee_state.original_id),
-                "number": bee_state.locked_digit if bee_state.locked_digit else bee_state.current_num,
-                "is_locked": bee_state.locked_digit is not None,
+                "number": bee_state.locked_digit,
+                "is_locked": True,
                 "confidence": float(bee_state.current_conf or 0.0)
             })
 

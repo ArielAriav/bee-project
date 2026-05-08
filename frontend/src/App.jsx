@@ -70,7 +70,7 @@ function App() {
         
         <div style={styles.scrollArea}>
           {bees.length === 0 && status === 'processing' && (
-            <div style={styles.statusMsg}>Waiting for data...</div>
+            <div style={styles.statusMsg}>Waiting for detections...</div>
           )}
           {bees.map((bee) => (
             <div key={bee.track_id} style={{
