@@ -32,7 +32,7 @@ function App() {
                   try {
                     const ctx = new (window.AudioContext || window.webkitAudioContext)();
   
-                    [0, 0.4, 0.8].forEach(startTime => {
+                    [0, 0.4, 0.8, 1.2, 1.6].forEach(startTime => {
                       const osc = ctx.createOscillator();
                       const gain = ctx.createGain();
                       osc.connect(gain);
