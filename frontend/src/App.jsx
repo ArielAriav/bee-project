@@ -36,12 +36,12 @@ function App() {
                     const gainNode = ctx.createGain();
                     oscillator.connect(gainNode);
                     gainNode.connect(ctx.destination);
-                    oscillator.frequency.value = 880;
-                    oscillator.type = 'sine';
+                    oscillator.frequency.value = 660;
+                    oscillator.type = 'triangle';
                     gainNode.gain.setValueAtTime(0.5, ctx.currentTime);
-                    gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.8);
+                    gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 2.5);
                     oscillator.start(ctx.currentTime);
-                    oscillator.stop(ctx.currentTime + 0.8);
+                    oscillator.stop(ctx.currentTime + 2.5);
                   } catch (e) {
                     console.warn('Audio not available:', e);
                   }
