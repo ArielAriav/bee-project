@@ -7,6 +7,9 @@ function App() {
   const [bees, setBees] = useState([]); 
   const [videoUrl, setVideoUrl] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [targetBee, setTargetBee] = useState('');
+  const [alertedBees, setAlertedBees] = useState(new Set());
+  const [alertMessage, setAlertMessage] = useState('');
 
   useEffect(() => {
     let interval;
@@ -16,16 +19,38 @@ function App() {
           const res = await axios.get("http://178.63.89.118:8000/get-result");
           if (res.data.bees) {
             setBees(res.data.bees);
+
+            // NEW: check if target bee was just detected
+            if (targetBee) {
+              res.data.bees.forEach(bee => {
+                if (
+                  String(bee.track_id) === String(targetBee) &&
+                  bee.is_locked &&
+                  !alertedBees.has(bee.track_id)
+                ) {
+                  // play alert sound
+                  const audio = new Audio('https://www.soundjay.com/buttons/beep-01a.mp3');
+                  audio.play().catch(() => {});
+
+                  // show non-blocking visual alert
+                  setAlertMessage(`🐝 Bee #${targetBee} detected!`);
+                  setTimeout(() => setAlertMessage(''), 5000);
+
+                  // mark as alerted so it doesn't repeat
+                  setAlertedBees(prev => new Set(prev).add(bee.track_id));
+                }
+              });
+            }
           }
           if (res.data.video_ended) {
             setStatus('finished');
             clearInterval(interval);
           }
         } catch (e) { console.error("Poll error:", e); }
-      }, 1000); 
+      }, 1000);
     }
     return () => clearInterval(interval);
-  }, [status]);
+  }, [status, targetBee, alertedBees]);
 
   const handleUpload = async (e) => {
     const file = e.target.files[0];
@@ -60,12 +85,29 @@ function App() {
     setStatus('idle');
     setBees([]);
     setVideoUrl(null);
+    setAlertedBees(new Set()); 
+    setAlertMessage('');
   };
 
   return (
     <div style={styles.container}>
       <div style={styles.sidebar}>
         <div style={styles.logo}>🐝 Bee<span>Vision</span></div>
+        <div style={styles.targetInput}>
+          <div style={{fontSize: '11px', color: '#888', marginBottom: '6px', textTransform: 'uppercase'}}>
+            Target Bee ID
+          </div>
+          <input
+            type="number"
+            placeholder="e.g. 47"
+            value={targetBee}
+            onChange={e => {
+              setTargetBee(e.target.value);
+              setAlertedBees(new Set()); // reset alerts when target changes
+            }}
+            style={styles.inputField}
+          />
+        </div>
         <div style={styles.listHeader}>Detections: {bees.length}</div>
         
         <div style={styles.scrollArea}>
@@ -92,6 +134,11 @@ function App() {
       </div>
 
       <div style={styles.main}>
+        {alertMessage && (
+          <div style={styles.alertBanner}>
+            {alertMessage}
+          </div>
+        )}
         {status === 'idle' && (
           <div style={styles.upload}>
             <h2 style={{marginTop: 0}}>Tag & number Recognition</h2>
@@ -169,7 +216,10 @@ const styles = {
   gridId: { fontSize: '10px', color: '#666' },
   finalBtn: { width: '100%', padding: '15px', background: '#f1c40f', color: '#000', border: 'none', borderRadius: '10px', fontWeight: 'bold', cursor: 'pointer' },
   progressBar: { width: '300px', height: '8px', background: '#333', borderRadius: '4px', overflow: 'hidden', margin: '20px auto' },
-progressFill: { height: '100%', background: '#f1c40f', borderRadius: '4px', transition: 'width 0.3s ease' },
+  progressFill: { height: '100%', background: '#f1c40f', borderRadius: '4px', transition: 'width 0.3s ease' },
+  targetInput: { marginBottom: '16px', paddingBottom: '16px', borderBottom: '1px solid #333'},
+  inputField: { width: '100%', padding: '8px 10px', background: '#252525', border: '1px solid #444', borderRadius: '6px', color: '#fff', fontSize: '16px', boxSizing: 'border-box'},
+  alertBanner: { position: 'absolute', top: '20px', left: '50%', transform: 'translateX(-50%)', background: '#f1c40f', color: '#000', padding: '14px 28px', borderRadius: '12px', fontSize: '18px', fontWeight: 'bold', zIndex: 1000, boxShadow: '0 4px 20px rgba(241,196,15,0.5)',},
 };
 
 export default App;
