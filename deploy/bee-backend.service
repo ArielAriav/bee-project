@@ -1,0 +1,15 @@
+[Unit]
+Description=Bee Vision FastAPI backend
+After=network.target
+
+[Service]
+Type=simple
+User=student
+WorkingDirectory=/home/student/bee-project/backend
+Environment=PATH=/home/student/bee_env/bin:/usr/bin
+ExecStart=/home/student/bee_env/bin/uvicorn main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

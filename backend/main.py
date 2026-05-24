@@ -86,14 +86,29 @@ def cleanup_temporary_files():
         except Exception as e:
             print(f"Cleanup Error: {e}")
 
+def _websocket_paths():
+    paths = []
+    for route in app.routes:
+        if route.__class__.__name__ == "WebSocketRoute":
+            paths.append(route.path)
+    return paths
+
+
 @app.get("/health")
 async def health():
     """Used to verify the deployed backend includes live-camera WebSocket support."""
+    ws_paths = _websocket_paths()
     return {
         "status": "ok",
-        "features": {"websocket_live": True},
-        "websocket_path": "/ws/live",
+        "app_file": os.path.abspath(__file__),
+        "websocket_paths": ws_paths,
+        "websocket_ready": "/ws/live" in ws_paths,
     }
+
+
+@app.on_event("startup")
+async def startup_log_routes():
+    print("--- Registered WebSocket paths:", _websocket_paths())
 
 
 @app.post("/upload-video")
@@ -119,7 +134,6 @@ async def upload(file: UploadFile = File(...)):
     return {"filename": filename, "session_id": new_session_id}
 
 
-@app.websocket("/ws/live")
 async def websocket_live(websocket: WebSocket):
     """
     Receive JPEG frames from the client's browser camera, run the same inference
@@ -186,6 +200,9 @@ async def websocket_live(websocket: WebSocket):
         if active_session["id"] == session_id:
             active_session["is_finished"] = True
             active_session["id"] = None
+
+
+app.add_api_websocket_route("/ws/live", websocket_live)
 
 
 @app.post("/stop-session")

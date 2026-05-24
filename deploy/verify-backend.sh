@@ -3,10 +3,18 @@
 set -e
 
 echo "=== Local backend (port 8000) ==="
-curl -sf http://127.0.0.1:8000/health | python3 -m json.tool || {
+HEALTH=$(curl -sf http://127.0.0.1:8000/health) || {
   echo "FAIL: backend not responding on 127.0.0.1:8000"
   exit 1
 }
+echo "$HEALTH" | python3 -m json.tool
+echo "$HEALTH" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+if not d.get('websocket_ready'):
+    print('FAIL: websocket_ready is false — run ./deploy/fix-backend.sh')
+    sys.exit(1)
+"
 
 echo ""
 echo "=== OpenAPI paths (must include WebSocket via /ws/live in app code) ==="

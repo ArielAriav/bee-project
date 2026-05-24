@@ -303,9 +303,9 @@ function App() {
 
       try {
         const health = await axios.get(`${getApiBase()}/health`, { timeout: 5000 });
-        if (!health.data?.features?.websocket_live) {
+        if (!health.data?.websocket_ready) {
           setCameraError(
-            'Backend is outdated (no live camera support). On the server: cd ~/bee-project && git pull && sudo systemctl restart bee-backend'
+            'Backend WebSocket is not active. On the server run: cd ~/bee-project && chmod +x deploy/fix-backend.sh && ./deploy/fix-backend.sh'
           );
           stopCameraStream();
           return;
