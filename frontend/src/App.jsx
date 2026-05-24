@@ -316,18 +316,27 @@ function App() {
 
       ws.onerror = () => {
         setCameraError(
-          'Could not connect to the AI server. Ensure the backend is running and Caddy proxies /ws to port 8000.'
+          'Could not connect to the AI server. On the server run: sudo cp ~/bee-project/deploy/Caddyfile /etc/caddy/Caddyfile && sudo systemctl reload caddy'
         );
         stopCameraStream();
         setStatus('idle');
         setActiveInputSource(null);
       };
 
-      ws.onclose = () => {
-        if (cameraActiveRef.current) {
-          cameraActiveRef.current = false;
-          setStatus((prev) => (prev === 'processing' ? 'finished' : prev));
+      ws.onclose = (event) => {
+        const wasActive = cameraActiveRef.current;
+        cameraActiveRef.current = false;
+        if (!wasActive) return;
+        if (event.code !== 1000 && event.code !== 1001) {
+          setCameraError(
+            `AI server connection closed (${event.code}). Check Caddy proxies /ws to port 8000 and bee-backend is running.`
+          );
+          setStatus('idle');
+          setActiveInputSource(null);
+          stopCameraStream();
+          return;
         }
+        setStatus((prev) => (prev === 'processing' ? 'finished' : prev));
       };
     } catch (e) {
       console.error('Camera start error:', e);
