@@ -87,10 +87,11 @@ def cleanup_temporary_files():
             print(f"Cleanup Error: {e}")
 
 def _websocket_paths():
+    """FastAPI registers WebSockets as APIWebSocketRoute, not WebSocketRoute."""
     paths = []
     for route in app.routes:
-        if route.__class__.__name__ == "WebSocketRoute":
-            paths.append(route.path)
+        if "WebSocket" in route.__class__.__name__:
+            paths.append(getattr(route, "path", str(route)))
     return paths
 
 

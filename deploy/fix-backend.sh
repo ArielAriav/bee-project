@@ -14,7 +14,7 @@ grep -n "add_api_websocket_route\|ws/live" backend/main.py
 echo "=== Stopping old backend processes on port 8000 ==="
 sudo systemctl stop bee-backend 2>/dev/null || true
 sleep 1
-if command -v fuser >/dev/null  then
+if command -v fuser >/dev/null 2>&1; then
   sudo fuser -k 8000/tcp 2>/dev/null || true
 fi
 sleep 1

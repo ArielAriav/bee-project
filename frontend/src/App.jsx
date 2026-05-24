@@ -301,23 +301,6 @@ function App() {
       video.srcObject = stream;
       await video.play();
 
-      try {
-        const health = await axios.get(`${getApiBase()}/health`, { timeout: 5000 });
-        if (!health.data?.websocket_ready) {
-          setCameraError(
-            'Backend WebSocket is not active. On the server run: cd ~/bee-project && chmod +x deploy/fix-backend.sh && ./deploy/fix-backend.sh'
-          );
-          stopCameraStream();
-          return;
-        }
-      } catch {
-        setCameraError(
-          'Cannot reach the AI backend. On the server: sudo systemctl restart bee-backend && sudo cp ~/bee-project/deploy/Caddyfile /etc/caddy/Caddyfile && sudo systemctl reload caddy'
-        );
-        stopCameraStream();
-        return;
-      }
-
       const ws = new WebSocket(`${getWsBase()}/ws/live`);
       ws.binaryType = 'arraybuffer';
       wsRef.current = ws;
