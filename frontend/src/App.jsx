@@ -1,76 +1,199 @@
 // frontend/src/App.jsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 
 const API_BASE = "http://178.63.89.118:8000";
+const WS_BASE = API_BASE.replace(/^http/, 'ws');
 
 function App() {
   const [status, setStatus] = useState('idle');
-  const [bees, setBees] = useState([]); 
+  const [bees, setBees] = useState([]);
   const [videoUrl, setVideoUrl] = useState(null);
+  const [processedFrameUrl, setProcessedFrameUrl] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [targetBee, setTargetBee] = useState('');
   const [alertedBees, setAlertedBees] = useState(new Set());
   const [alertMessage, setAlertMessage] = useState('');
-  const [inputSource, setInputSource] = useState('video'); // idle screen: 'video' | 'camera'
-  const [activeInputSource, setActiveInputSource] = useState(null); // running session source
+  const [inputSource, setInputSource] = useState('video');
+  const [activeInputSource, setActiveInputSource] = useState(null);
+  const [cameraError, setCameraError] = useState('');
+
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const wsRef = useRef(null);
+  const mediaStreamRef = useRef(null);
+  const waitingForFrameRef = useRef(false);
+  const cameraActiveRef = useRef(false);
+  const processedUrlRef = useRef(null);
+
+  const revokeProcessedUrl = useCallback(() => {
+    if (processedUrlRef.current) {
+      URL.revokeObjectURL(processedUrlRef.current);
+      processedUrlRef.current = null;
+    }
+  }, []);
+
+  const applyBeeResults = useCallback((beeList) => {
+    if (!beeList) return;
+    setBees(beeList);
+
+    if (!targetBee) return;
+    beeList.forEach((bee) => {
+      if (
+        String(bee.track_id) === String(targetBee) &&
+        bee.is_locked &&
+        !alertedBees.has(bee.track_id)
+      ) {
+        try {
+          const ctx = new (window.AudioContext || window.webkitAudioContext)();
+          [0, 0.4, 0.8, 1.2, 1.6].forEach((startTime) => {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.frequency.value = 880;
+            osc.type = 'sine';
+            gain.gain.setValueAtTime(0.5, ctx.currentTime + startTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + startTime + 0.3);
+            osc.start(ctx.currentTime + startTime);
+            osc.stop(ctx.currentTime + startTime + 0.3);
+          });
+        } catch (e) {
+          console.warn('Audio not available:', e);
+        }
+
+        setAlertMessage(`🐝 Bee #${targetBee} detected!`);
+        setTimeout(() => setAlertMessage(''), 5000);
+        setAlertedBees((prev) => new Set(prev).add(bee.track_id));
+      }
+    });
+  }, [targetBee, alertedBees]);
+
+  const stopCameraStream = useCallback(() => {
+    cameraActiveRef.current = false;
+    waitingForFrameRef.current = false;
+
+    if (wsRef.current) {
+      try {
+        if (wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send('stop');
+        }
+        wsRef.current.close();
+      } catch (e) {
+        console.warn('WebSocket close:', e);
+      }
+      wsRef.current = null;
+    }
+
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current = null;
+    }
+
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+
+    revokeProcessedUrl();
+    setProcessedFrameUrl(null);
+  }, [revokeProcessedUrl]);
+
+  const captureAndSendFrame = useCallback(() => {
+    const ws = wsRef.current;
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+
+    if (
+      !cameraActiveRef.current ||
+      !ws ||
+      ws.readyState !== WebSocket.OPEN ||
+      !video ||
+      !canvas ||
+      waitingForFrameRef.current ||
+      video.videoWidth === 0
+    ) {
+      return;
+    }
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0);
+
+    canvas.toBlob(
+      (blob) => {
+        if (!blob || !cameraActiveRef.current || ws.readyState !== WebSocket.OPEN) {
+          return;
+        }
+        waitingForFrameRef.current = true;
+        ws.send(blob);
+      },
+      'image/jpeg',
+      0.72
+    );
+  }, []);
+
+  const scheduleNextFrame = useCallback(() => {
+    if (!cameraActiveRef.current) return;
+    requestAnimationFrame(() => captureAndSendFrame());
+  }, [captureAndSendFrame]);
+
+  const handleWebSocketMessage = useCallback((event) => {
+    waitingForFrameRef.current = false;
+
+    if (event.data instanceof Blob) {
+      revokeProcessedUrl();
+      const url = URL.createObjectURL(event.data);
+      processedUrlRef.current = url;
+      setProcessedFrameUrl(url);
+    } else if (event.data instanceof ArrayBuffer) {
+      revokeProcessedUrl();
+      const blob = new Blob([event.data], { type: 'image/jpeg' });
+      const url = URL.createObjectURL(blob);
+      processedUrlRef.current = url;
+      setProcessedFrameUrl(url);
+    } else if (typeof event.data === 'string') {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'results') {
+          applyBeeResults(msg.bees);
+        } else if (msg.type === 'error') {
+          setCameraError(msg.message || 'Processing error');
+        }
+      } catch (e) {
+        console.warn('WebSocket message parse error:', e);
+      }
+    }
+
+    scheduleNextFrame();
+  }, [applyBeeResults, revokeProcessedUrl, scheduleNextFrame]);
 
   useEffect(() => {
     let interval;
-    if (status === 'processing') {
+    if (status === 'processing' && activeInputSource === 'video') {
       interval = setInterval(async () => {
         try {
           const res = await axios.get(`${API_BASE}/get-result`);
           if (res.data.bees) {
-            setBees(res.data.bees);
-
-            // NEW: check if target bee was just detected
-            if (targetBee) {
-              res.data.bees.forEach(bee => {
-                if (
-                  String(bee.track_id) === String(targetBee) &&
-                  bee.is_locked &&
-                  !alertedBees.has(bee.track_id)
-                ) {
-                  // play alert sound
-                  try {
-                    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-  
-                    [0, 0.4, 0.8, 1.2, 1.6].forEach(startTime => {
-                      const osc = ctx.createOscillator();
-                      const gain = ctx.createGain();
-                      osc.connect(gain);
-                      gain.connect(ctx.destination);
-                      osc.frequency.value = 880;
-                      osc.type = 'sine';
-                      gain.gain.setValueAtTime(0.5, ctx.currentTime + startTime);
-                      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + startTime + 0.3);
-                      osc.start(ctx.currentTime + startTime);
-                      osc.stop(ctx.currentTime + startTime + 0.3);
-                    });
-                  } catch (e) {
-                    console.warn('Audio not available:', e);
-                  }
-
-                  // show non-blocking visual alert
-                  setAlertMessage(`🐝 Bee #${targetBee} detected!`);
-                  setTimeout(() => setAlertMessage(''), 5000);
-
-                  // mark as alerted so it doesn't repeat
-                  setAlertedBees(prev => new Set(prev).add(bee.track_id));
-                }
-              });
-            }
+            applyBeeResults(res.data.bees);
           }
           if (res.data.video_ended) {
             setStatus('finished');
             clearInterval(interval);
           }
-        } catch (e) { console.error("Poll error:", e); }
+        } catch (e) {
+          console.error('Poll error:', e);
+        }
       }, 1000);
     }
     return () => clearInterval(interval);
-  }, [status, targetBee, alertedBees]);
+  }, [status, activeInputSource, applyBeeResults]);
+
+  useEffect(() => {
+    return () => {
+      stopCameraStream();
+    };
+  }, [stopCameraStream]);
 
   const handleUpload = async (e) => {
     const file = e.target.files[0];
@@ -79,69 +202,131 @@ function App() {
     setVideoUrl(null);
     setBees([]);
     setStatus('idle');
-    e.target.value = ""; 
+    e.target.value = '';
 
     const formData = new FormData();
-    formData.append("file", file);
+    formData.append('file', file);
 
     try {
       setStatus('uploading');
       const res = await axios.post(`${API_BASE}/upload-video`, formData, {
         onUploadProgress: (progressEvent) => {
           const percent = Math.round(
-              (progressEvent.loaded * 100) / progressEvent.total
+            (progressEvent.loaded * 100) / progressEvent.total
           );
           setUploadProgress(percent);
-        }
+        },
       });
       setUploadProgress(0);
       setActiveInputSource('video');
       setStatus('processing');
-      setVideoUrl(`${API_BASE}/video-feed?filename=${res.data.filename}&session_id=${res.data.session_id}`);
-    } catch (e) { alert("Upload failed"); }
+      setVideoUrl(
+        `${API_BASE}/video-feed?filename=${res.data.filename}&session_id=${res.data.session_id}`
+      );
+    } catch (e) {
+      alert('Upload failed');
+    }
   };
 
   const handleStartCamera = async () => {
+    setCameraError('');
     setVideoUrl(null);
     setBees([]);
     setAlertedBees(new Set());
     setAlertMessage('');
+    revokeProcessedUrl();
+    setProcessedFrameUrl(null);
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCameraError('Camera access is not supported in this browser.');
+      return;
+    }
 
     try {
-      const res = await axios.post(`${API_BASE}/start-camera`);
-      const { session_id, camera_index } = res.data;
-      setActiveInputSource('camera');
-      setStatus('processing');
-      setVideoUrl(
-        `${API_BASE}/camera-feed?session_id=${session_id}&camera_index=${camera_index}`
-      );
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          facingMode: 'environment',
+        },
+        audio: false,
+      });
+
+      mediaStreamRef.current = stream;
+      const video = videoRef.current;
+      if (!video) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+
+      video.srcObject = stream;
+      await video.play();
+
+      const ws = new WebSocket(`${WS_BASE}/ws/live`);
+      ws.binaryType = 'arraybuffer';
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        cameraActiveRef.current = true;
+        setActiveInputSource('camera');
+        setStatus('processing');
+        scheduleNextFrame();
+      };
+
+      ws.onmessage = handleWebSocketMessage;
+
+      ws.onerror = () => {
+        setCameraError('WebSocket connection failed.');
+        stopCameraStream();
+        setStatus('idle');
+        setActiveInputSource(null);
+      };
+
+      ws.onclose = () => {
+        if (cameraActiveRef.current) {
+          cameraActiveRef.current = false;
+          setStatus((prev) => (prev === 'processing' ? 'finished' : prev));
+        }
+      };
     } catch (e) {
-      alert("Could not start camera. Check that a USB camera is connected.");
+      console.error('Camera start error:', e);
+      stopCameraStream();
+      if (e.name === 'NotAllowedError') {
+        setCameraError('Camera permission denied. Allow camera access and try again.');
+      } else if (e.name === 'NotFoundError') {
+        setCameraError('No camera found. Connect a USB camera and try again.');
+      } else {
+        setCameraError('Could not access camera.');
+      }
       setStatus('idle');
+      setActiveInputSource(null);
     }
   };
 
   const reset = async () => {
+    stopCameraStream();
     if (status === 'processing' || status === 'uploading') {
       try {
         await axios.post(`${API_BASE}/stop-session`);
       } catch (e) {
-        console.warn("Stop session:", e);
+        console.warn('Stop session:', e);
       }
     }
     setStatus('idle');
     setBees([]);
     setVideoUrl(null);
     setActiveInputSource(null);
-    setAlertedBees(new Set()); 
+    setAlertedBees(new Set());
     setAlertMessage('');
+    setCameraError('');
   };
 
   const handleStopCamera = async () => {
+    stopCameraStream();
     try {
       await axios.post(`${API_BASE}/stop-session`);
     } catch (e) {
-      console.warn("Stop session:", e);
+      console.warn('Stop session:', e);
     }
     setStatus('finished');
     setVideoUrl(null);
@@ -152,37 +337,42 @@ function App() {
       <div style={styles.sidebar}>
         <div style={styles.logo}>🐝 Bee<span>Vision</span></div>
         <div style={styles.targetInput}>
-          <div style={{fontSize: '11px', color: '#888', marginBottom: '6px', textTransform: 'uppercase'}}>
+          <div style={{ fontSize: '11px', color: '#888', marginBottom: '6px', textTransform: 'uppercase' }}>
             Target Bee ID
           </div>
           <input
             type="number"
             placeholder="e.g. 47"
             value={targetBee}
-            onChange={e => {
+            onChange={(e) => {
               setTargetBee(e.target.value);
-              setAlertedBees(new Set()); // reset alerts when target changes
+              setAlertedBees(new Set());
             }}
             style={styles.inputField}
           />
         </div>
         <div style={styles.listHeader}>Detections: {bees.length}</div>
-        
+
         <div style={styles.scrollArea}>
           {bees.length === 0 && status === 'processing' && (
             <div style={styles.statusMsg}>Waiting for detections...</div>
           )}
           {bees.map((bee) => (
-            <div key={bee.track_id} style={{
-              ...styles.beeCard, 
-              borderColor: bee.is_locked ? '#f1c40f' : '#333'
-            }}>
+            <div
+              key={bee.track_id}
+              style={{
+                ...styles.beeCard,
+                borderColor: bee.is_locked ? '#f1c40f' : '#333',
+              }}
+            >
               <div style={styles.cardHeader}>
                 <span>Track ID: {bee.track_id}</span>
                 {bee.is_locked && <span style={styles.badge}>LOCKED</span>}
               </div>
               <div style={styles.beeNum}>{bee.number || 'Scanning...'}</div>
-              <div style={styles.confidence}>Conf: {(bee.confidence * 100).toFixed(0)}%</div>
+              <div style={styles.confidence}>
+                Conf: {(bee.confidence * 100).toFixed(0)}%
+              </div>
             </div>
           ))}
         </div>
@@ -192,18 +382,19 @@ function App() {
       </div>
 
       <div style={styles.main}>
+        <video ref={videoRef} autoPlay playsInline muted style={styles.hiddenVideo} />
+        <canvas ref={canvasRef} style={styles.hiddenVideo} />
+
         {alertMessage && (
-          <div style={styles.alertBanner}>
-            {alertMessage}
-          </div>
+          <div style={styles.alertBanner}>{alertMessage}</div>
         )}
         {status === 'idle' && (
           <div style={styles.upload}>
-            <h2 style={{marginTop: 0}}>Tag & number Recognition</h2>
-            <p style={{color: '#888'}}>
+            <h2 style={{ marginTop: 0 }}>Tag & number Recognition</h2>
+            <p style={{ color: '#888' }}>
               {inputSource === 'video'
                 ? 'Upload video to identify tags'
-                : 'Connect a USB camera and start live detection'}
+                : 'Use your local webcam — frames stream to the server for AI detection'}
             </p>
             <div style={styles.sourceToggle}>
               <button
@@ -224,7 +415,7 @@ function App() {
                   ...(inputSource === 'camera' ? styles.sourceBtnActive : {}),
                 }}
               >
-                Live Camera (USB)
+                Live Camera
               </button>
             </div>
             {inputSource === 'video' ? (
@@ -233,20 +424,36 @@ function App() {
                 <label htmlFor="up" style={styles.btnUpload}>Select Video</label>
               </>
             ) : (
-              <button type="button" onClick={handleStartCamera} style={styles.btnUpload}>
+              <button
+                type="button"
+                onClick={handleStartCamera}
+                style={{ ...styles.btnUpload, border: 'none' }}
+              >
                 Start Live Camera
               </button>
             )}
+            {cameraError && (
+              <p style={{ color: '#e74c3c', marginTop: '16px', fontSize: '14px' }}>{cameraError}</p>
+            )}
           </div>
         )}
-        {status !== 'idle' && videoUrl && (
+
+        {activeInputSource === 'video' && status !== 'idle' && videoUrl && (
           <div style={styles.videoBox}>
-            <img src={videoUrl} alt="Live Stream" style={styles.img} />
-            {activeInputSource === 'camera' && status === 'processing' && (
-              <button type="button" onClick={handleStopCamera} style={styles.btnStopCamera}>
-                Stop Camera
-              </button>
+            <img src={videoUrl} alt="Processed video stream" style={styles.img} />
+          </div>
+        )}
+
+        {activeInputSource === 'camera' && status === 'processing' && (
+          <div style={styles.videoBox}>
+            {processedFrameUrl ? (
+              <img src={processedFrameUrl} alt="Live AI stream" style={styles.img} />
+            ) : (
+              <div style={styles.cameraPlaceholder}>Connecting camera...</div>
             )}
+            <button type="button" onClick={handleStopCamera} style={styles.btnStopCamera}>
+              Stop Camera
+            </button>
           </div>
         )}
 
@@ -254,10 +461,12 @@ function App() {
           <div style={styles.upload}>
             <h2 style={{ marginTop: 0 }}>Uploading video...</h2>
             <div style={styles.progressBar}>
-              <div style={{
+              <div
+                style={{
                   ...styles.progressFill,
-                  width: `${uploadProgress}%`
-              }} />
+                  width: `${uploadProgress}%`,
+                }}
+              />
             </div>
             <p style={{ color: '#888' }}>{uploadProgress}%</p>
           </div>
@@ -267,9 +476,11 @@ function App() {
           <div style={styles.finalOverlay}>
             <div style={styles.finalCard}>
               <div style={styles.finalHeader}>🎥 Session Complete</div>
-              <div style={styles.finalSub}>Identified {bees.filter(b => b.number).length} unique tags</div>
+              <div style={styles.finalSub}>
+                Identified {bees.filter((b) => b.number).length} unique tags
+              </div>
               <div style={styles.grid}>
-                {bees.filter(b => b.number).map(bee => (
+                {bees.filter((b) => b.number).map((bee) => (
                   <div key={bee.track_id} style={styles.gridItem}>
                     <div style={styles.gridNum}>{bee.number}</div>
                     <div style={styles.gridId}>ID: {bee.track_id}</div>
@@ -303,6 +514,8 @@ const styles = {
   btnUpload: { display: 'inline-block', marginTop: '20px', padding: '12px 30px', background: '#f1c40f', color: '#000', borderRadius: '30px', cursor: 'pointer', fontWeight: 'bold' },
   videoBox: { maxWidth: '90%', maxHeight: '90%', border: '2px solid #333', borderRadius: '10px', overflow: 'hidden' },
   img: { display: 'block', width: '100%', maxHeight: '80vh' },
+  hiddenVideo: { position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none' },
+  cameraPlaceholder: { padding: '80px 40px', textAlign: 'center', color: '#666', fontStyle: 'italic' },
   finalOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.9)', display: 'flex', justifyContent: 'center', alignItems: 'center' },
   finalCard: { background: '#1e1e1e', padding: '40px', borderRadius: '20px', border: '1px solid #f1c40f', width: '500px', textAlign: 'center' },
   finalHeader: { fontSize: '24px', marginBottom: '10px' },
@@ -314,9 +527,9 @@ const styles = {
   finalBtn: { width: '100%', padding: '15px', background: '#f1c40f', color: '#000', border: 'none', borderRadius: '10px', fontWeight: 'bold', cursor: 'pointer' },
   progressBar: { width: '300px', height: '8px', background: '#333', borderRadius: '4px', overflow: 'hidden', margin: '20px auto' },
   progressFill: { height: '100%', background: '#f1c40f', borderRadius: '4px', transition: 'width 0.3s ease' },
-  targetInput: { marginBottom: '16px', paddingBottom: '16px', borderBottom: '1px solid #333'},
-  inputField: { width: '100%', padding: '8px 10px', background: '#252525', border: '1px solid #444', borderRadius: '6px', color: '#fff', fontSize: '16px', boxSizing: 'border-box'},
-  alertBanner: { position: 'absolute', top: '20px', left: '50%', transform: 'translateX(-50%)', background: '#f1c40f', color: '#000', padding: '14px 28px', borderRadius: '12px', fontSize: '18px', fontWeight: 'bold', zIndex: 1000, boxShadow: '0 4px 20px rgba(241,196,15,0.5)',},
+  targetInput: { marginBottom: '16px', paddingBottom: '16px', borderBottom: '1px solid #333' },
+  inputField: { width: '100%', padding: '8px 10px', background: '#252525', border: '1px solid #444', borderRadius: '6px', color: '#fff', fontSize: '16px', boxSizing: 'border-box' },
+  alertBanner: { position: 'absolute', top: '20px', left: '50%', transform: 'translateX(-50%)', background: '#f1c40f', color: '#000', padding: '14px 28px', borderRadius: '12px', fontSize: '18px', fontWeight: 'bold', zIndex: 1000, boxShadow: '0 4px 20px rgba(241,196,15,0.5)' },
   sourceToggle: { display: 'flex', gap: '10px', justifyContent: 'center', marginBottom: '20px', flexWrap: 'wrap' },
   sourceBtn: { padding: '10px 16px', background: 'transparent', border: '1px solid #444', color: '#aaa', borderRadius: '30px', cursor: 'pointer', fontSize: '13px' },
   sourceBtnActive: { borderColor: '#f1c40f', color: '#f1c40f', background: 'rgba(241,196,15,0.1)' },

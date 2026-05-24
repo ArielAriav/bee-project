@@ -5,8 +5,8 @@ import shutil
 import cv2
 import uuid
 import glob
-from typing import Optional
-from fastapi import FastAPI, UploadFile, File, Query
+import numpy as np
+from fastapi import FastAPI, UploadFile, File, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from ultralytics import YOLO
@@ -36,8 +36,43 @@ active_session = {
     "processor": None,
     "is_finished": False,
     "current_file": None,
-    "input_source": None,  # "file" | "camera"
+    "input_source": None,  # "file" | "camera_ws"
 }
+
+
+def build_bees_list(proc):
+    """Build the bee detection list from a processor instance."""
+    active_bees = []
+    for _, bee_state in list(proc.bees.items()):
+        if bee_state.original_id is None:
+            continue
+        active_bees.append({
+            "track_id": int(bee_state.original_id),
+            "number": bee_state.locked_digit,
+            "is_locked": True,
+            "confidence": float(bee_state.current_conf or 0.0),
+        })
+    active_bees.sort(key=lambda x: (not x["is_locked"], -x["confidence"]))
+    return active_bees
+
+
+def decode_jpeg_frame(data: bytes):
+    """Decode incoming JPEG bytes from the browser into a BGR OpenCV frame."""
+    if len(data) > config.MAX_WS_FRAME_BYTES:
+        return None
+    arr = np.frombuffer(data, dtype=np.uint8)
+    return cv2.imdecode(arr, cv2.IMREAD_COLOR)
+
+
+def encode_jpeg_frame(frame):
+    """Encode a BGR frame to JPEG bytes for the WebSocket response."""
+    success, buffer = cv2.imencode(
+        ".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), config.WS_JPEG_QUALITY]
+    )
+    if not success:
+        return None
+    return buffer.tobytes()
+
 
 def cleanup_temporary_files():
     """
@@ -74,23 +109,73 @@ async def upload(file: UploadFile = File(...)):
     return {"filename": filename, "session_id": new_session_id}
 
 
-@app.post("/start-camera")
-async def start_camera(camera_index: Optional[int] = Query(default=None)):
-    """Start a live USB camera session using the same inference pipeline as uploaded video."""
+@app.websocket("/ws/live")
+async def websocket_live(websocket: WebSocket):
+    """
+    Receive JPEG frames from the client's browser camera, run the same inference
+    pipeline as uploaded video, and stream annotated frames + detections back.
+    """
     global active_session
+    await websocket.accept()
 
     cleanup_temporary_files()
+    session_id = str(uuid.uuid4())
+    proc = BeeProcessor(GLOBAL_YOLO_TAG, GLOBAL_YOLO_DIGITS, GLOBAL_YOLO_ANGLE)
 
-    device_index = camera_index if camera_index is not None else config.CAMERA_INDEX
-    new_session_id = str(uuid.uuid4())
-
-    active_session["processor"] = BeeProcessor(GLOBAL_YOLO_TAG, GLOBAL_YOLO_DIGITS, GLOBAL_YOLO_ANGLE)
-    active_session["id"] = new_session_id
+    active_session["processor"] = proc
+    active_session["id"] = session_id
     active_session["is_finished"] = False
     active_session["current_file"] = None
-    active_session["input_source"] = "camera"
+    active_session["input_source"] = "camera_ws"
 
-    return {"session_id": new_session_id, "camera_index": device_index}
+    try:
+        while True:
+            if active_session["id"] != session_id:
+                break
+
+            message = await websocket.receive()
+            if message.get("type") == "websocket.disconnect":
+                break
+
+            data = message.get("bytes")
+            if not data:
+                text = message.get("text")
+                if text == "stop":
+                    break
+                continue
+
+            frame = decode_jpeg_frame(data)
+            if frame is None:
+                await websocket.send_json({"type": "error", "message": "Invalid frame"})
+                continue
+
+            try:
+                annotated_frame = proc.process_and_annotate(frame)
+            except Exception as e:
+                print(f"WebSocket frame processing error: {e}")
+                annotated_frame = frame
+
+            jpeg_bytes = encode_jpeg_frame(annotated_frame)
+            if jpeg_bytes:
+                await websocket.send_bytes(jpeg_bytes)
+
+            await websocket.send_json({
+                "type": "results",
+                "bees": build_bees_list(proc),
+                "video_ended": False,
+            })
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        print(f"WebSocket session error: {e}")
+        try:
+            await websocket.send_json({"type": "error", "message": str(e)})
+        except Exception:
+            pass
+    finally:
+        if active_session["id"] == session_id:
+            active_session["is_finished"] = True
+            active_session["id"] = None
 
 
 @app.post("/stop-session")
@@ -148,52 +233,6 @@ async def video_feed(filename: str = Query(...), session_id: str = Query(...)):
     )
 
 
-def camera_frame_generator(session_id, camera_index):
-    """
-    Reads frames from a USB camera and runs the same per-frame processing as file input.
-    """
-    cap = cv2.VideoCapture(camera_index)
-    if not cap.isOpened():
-        active_session["is_finished"] = True
-        return
-
-    try:
-        while cap.isOpened():
-            if session_id != active_session["id"] or active_session["is_finished"]:
-                break
-
-            ret, frame = cap.read()
-            if not ret or frame is None:
-                continue
-
-            proc = active_session["processor"]
-            try:
-                annotated_frame = proc.process_and_annotate(frame) if proc else frame
-            except Exception as e:
-                print(f"Camera Frame Processing Exception: {e}")
-                annotated_frame = frame
-
-            if annotated_frame is not None:
-                success, buffer = cv2.imencode('.jpg', annotated_frame)
-                if success:
-                    yield (b'--frame\r\n'
-                           b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-    finally:
-        cap.release()
-        active_session["is_finished"] = True
-
-
-@app.get("/camera-feed")
-async def camera_feed(
-    session_id: str = Query(...),
-    camera_index: Optional[int] = Query(default=None),
-):
-    device_index = camera_index if camera_index is not None else config.CAMERA_INDEX
-    return StreamingResponse(
-        camera_frame_generator(session_id, device_index),
-        media_type="multipart/x-mixed-replace; boundary=frame",
-    )
-
 @app.get("/get-result")
 async def get_result():
     try:
@@ -201,20 +240,8 @@ async def get_result():
         if not proc:
             return {"bees": [], "video_ended": active_session["is_finished"], "status": "Idle"}
 
-        active_bees = []
-        for bee_id, bee_state in list(proc.bees.items()):
-            if bee_state.original_id is None:
-                continue
-            active_bees.append({
-                "track_id": int(bee_state.original_id),
-                "number": bee_state.locked_digit,
-                "is_locked": True,
-                "confidence": float(bee_state.current_conf or 0.0)
-            })
-
-        active_bees.sort(key=lambda x: (not x["is_locked"], -x["confidence"]))
         return {
-            "bees": active_bees,
+            "bees": build_bees_list(proc),
             "video_ended": active_session["is_finished"],
             "status": "Processing" if not active_session["is_finished"] else "Finished"
         }

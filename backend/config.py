@@ -17,5 +17,6 @@ LOCK_COUNT = 10
 CROP_EXPAND = 50
 SAVE_CROPS_DIR = "angleModelData"
 
-# USB / live camera (OpenCV device index; 0 = default camera)
-CAMERA_INDEX = int(os.environ.get("CAMERA_INDEX", "0"))
+# WebSocket live camera (client-side capture)
+MAX_WS_FRAME_BYTES = int(os.environ.get("MAX_WS_FRAME_BYTES", str(4 * 1024 * 1024)))
+WS_JPEG_QUALITY = int(os.environ.get("WS_JPEG_QUALITY", "85"))
