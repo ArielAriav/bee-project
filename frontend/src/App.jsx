@@ -238,7 +238,15 @@ function App() {
     setProcessedFrameUrl(null);
 
     if (!navigator.mediaDevices?.getUserMedia) {
-      setCameraError('Camera access is not supported in this browser.');
+      const isSecure =
+        window.isSecureContext ||
+        location.hostname === 'localhost' ||
+        location.hostname === '127.0.0.1';
+      setCameraError(
+        isSecure
+          ? 'Camera access is not supported in this browser.'
+          : 'Camera requires HTTPS (or localhost). Open this app via https://… — Chrome blocks cameras on plain http:// sites.'
+      );
       return;
     }
 
