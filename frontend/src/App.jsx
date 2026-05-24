@@ -2,6 +2,8 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 
+const API_BASE = "http://178.63.89.118:8000";
+
 function App() {
   const [status, setStatus] = useState('idle');
   const [bees, setBees] = useState([]); 
@@ -10,13 +12,15 @@ function App() {
   const [targetBee, setTargetBee] = useState('');
   const [alertedBees, setAlertedBees] = useState(new Set());
   const [alertMessage, setAlertMessage] = useState('');
+  const [inputSource, setInputSource] = useState('video'); // idle screen: 'video' | 'camera'
+  const [activeInputSource, setActiveInputSource] = useState(null); // running session source
 
   useEffect(() => {
     let interval;
     if (status === 'processing') {
       interval = setInterval(async () => {
         try {
-          const res = await axios.get("http://178.63.89.118:8000/get-result");
+          const res = await axios.get(`${API_BASE}/get-result`);
           if (res.data.bees) {
             setBees(res.data.bees);
 
@@ -82,7 +86,7 @@ function App() {
 
     try {
       setStatus('uploading');
-      const res = await axios.post("http://178.63.89.118:8000/upload-video", formData, {
+      const res = await axios.post(`${API_BASE}/upload-video`, formData, {
         onUploadProgress: (progressEvent) => {
           const percent = Math.round(
               (progressEvent.loaded * 100) / progressEvent.total
@@ -91,18 +95,56 @@ function App() {
         }
       });
       setUploadProgress(0);
+      setActiveInputSource('video');
       setStatus('processing');
-      setVideoUrl(`http://178.63.89.118:8000/video-feed?filename=${res.data.filename}&session_id=${res.data.session_id}`);
-      setStatus('processing');
+      setVideoUrl(`${API_BASE}/video-feed?filename=${res.data.filename}&session_id=${res.data.session_id}`);
     } catch (e) { alert("Upload failed"); }
   };
 
-  const reset = () => {
+  const handleStartCamera = async () => {
+    setVideoUrl(null);
+    setBees([]);
+    setAlertedBees(new Set());
+    setAlertMessage('');
+
+    try {
+      const res = await axios.post(`${API_BASE}/start-camera`);
+      const { session_id, camera_index } = res.data;
+      setActiveInputSource('camera');
+      setStatus('processing');
+      setVideoUrl(
+        `${API_BASE}/camera-feed?session_id=${session_id}&camera_index=${camera_index}`
+      );
+    } catch (e) {
+      alert("Could not start camera. Check that a USB camera is connected.");
+      setStatus('idle');
+    }
+  };
+
+  const reset = async () => {
+    if (status === 'processing' || status === 'uploading') {
+      try {
+        await axios.post(`${API_BASE}/stop-session`);
+      } catch (e) {
+        console.warn("Stop session:", e);
+      }
+    }
     setStatus('idle');
     setBees([]);
     setVideoUrl(null);
+    setActiveInputSource(null);
     setAlertedBees(new Set()); 
     setAlertMessage('');
+  };
+
+  const handleStopCamera = async () => {
+    try {
+      await axios.post(`${API_BASE}/stop-session`);
+    } catch (e) {
+      console.warn("Stop session:", e);
+    }
+    setStatus('finished');
+    setVideoUrl(null);
   };
 
   return (
@@ -158,14 +200,53 @@ function App() {
         {status === 'idle' && (
           <div style={styles.upload}>
             <h2 style={{marginTop: 0}}>Tag & number Recognition</h2>
-            <p style={{color: '#888'}}>Upload video to identify tags</p>
-            <input type="file" id="up" hidden onChange={handleUpload} accept="video/*" />
-            <label htmlFor="up" style={styles.btnUpload}>Select Video</label>
+            <p style={{color: '#888'}}>
+              {inputSource === 'video'
+                ? 'Upload video to identify tags'
+                : 'Connect a USB camera and start live detection'}
+            </p>
+            <div style={styles.sourceToggle}>
+              <button
+                type="button"
+                onClick={() => setInputSource('video')}
+                style={{
+                  ...styles.sourceBtn,
+                  ...(inputSource === 'video' ? styles.sourceBtnActive : {}),
+                }}
+              >
+                Pre-recorded Video
+              </button>
+              <button
+                type="button"
+                onClick={() => setInputSource('camera')}
+                style={{
+                  ...styles.sourceBtn,
+                  ...(inputSource === 'camera' ? styles.sourceBtnActive : {}),
+                }}
+              >
+                Live Camera (USB)
+              </button>
+            </div>
+            {inputSource === 'video' ? (
+              <>
+                <input type="file" id="up" hidden onChange={handleUpload} accept="video/*" />
+                <label htmlFor="up" style={styles.btnUpload}>Select Video</label>
+              </>
+            ) : (
+              <button type="button" onClick={handleStartCamera} style={styles.btnUpload}>
+                Start Live Camera
+              </button>
+            )}
           </div>
         )}
         {status !== 'idle' && videoUrl && (
           <div style={styles.videoBox}>
             <img src={videoUrl} alt="Live Stream" style={styles.img} />
+            {activeInputSource === 'camera' && status === 'processing' && (
+              <button type="button" onClick={handleStopCamera} style={styles.btnStopCamera}>
+                Stop Camera
+              </button>
+            )}
           </div>
         )}
 
@@ -236,6 +317,10 @@ const styles = {
   targetInput: { marginBottom: '16px', paddingBottom: '16px', borderBottom: '1px solid #333'},
   inputField: { width: '100%', padding: '8px 10px', background: '#252525', border: '1px solid #444', borderRadius: '6px', color: '#fff', fontSize: '16px', boxSizing: 'border-box'},
   alertBanner: { position: 'absolute', top: '20px', left: '50%', transform: 'translateX(-50%)', background: '#f1c40f', color: '#000', padding: '14px 28px', borderRadius: '12px', fontSize: '18px', fontWeight: 'bold', zIndex: 1000, boxShadow: '0 4px 20px rgba(241,196,15,0.5)',},
+  sourceToggle: { display: 'flex', gap: '10px', justifyContent: 'center', marginBottom: '20px', flexWrap: 'wrap' },
+  sourceBtn: { padding: '10px 16px', background: 'transparent', border: '1px solid #444', color: '#aaa', borderRadius: '30px', cursor: 'pointer', fontSize: '13px' },
+  sourceBtnActive: { borderColor: '#f1c40f', color: '#f1c40f', background: 'rgba(241,196,15,0.1)' },
+  btnStopCamera: { display: 'block', width: '100%', marginTop: '12px', padding: '12px', background: 'transparent', border: '1px solid #444', color: '#eee', cursor: 'pointer', borderRadius: '8px' },
 };
 
 export default App;

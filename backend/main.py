@@ -5,6 +5,7 @@ import shutil
 import cv2
 import uuid
 import glob
+from typing import Optional
 from fastapi import FastAPI, UploadFile, File, Query
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -34,7 +35,8 @@ active_session = {
     "id": None,
     "processor": None,
     "is_finished": False,
-    "current_file": None
+    "current_file": None,
+    "input_source": None,  # "file" | "camera"
 }
 
 def cleanup_temporary_files():
@@ -67,8 +69,37 @@ async def upload(file: UploadFile = File(...)):
     active_session["id"] = new_session_id
     active_session["is_finished"] = False
     active_session["current_file"] = temp_path
+    active_session["input_source"] = "file"
 
     return {"filename": filename, "session_id": new_session_id}
+
+
+@app.post("/start-camera")
+async def start_camera(camera_index: Optional[int] = Query(default=None)):
+    """Start a live USB camera session using the same inference pipeline as uploaded video."""
+    global active_session
+
+    cleanup_temporary_files()
+
+    device_index = camera_index if camera_index is not None else config.CAMERA_INDEX
+    new_session_id = str(uuid.uuid4())
+
+    active_session["processor"] = BeeProcessor(GLOBAL_YOLO_TAG, GLOBAL_YOLO_DIGITS, GLOBAL_YOLO_ANGLE)
+    active_session["id"] = new_session_id
+    active_session["is_finished"] = False
+    active_session["current_file"] = None
+    active_session["input_source"] = "camera"
+
+    return {"session_id": new_session_id, "camera_index": device_index}
+
+
+@app.post("/stop-session")
+async def stop_session():
+    """Stop the active stream (camera or video) and mark the session finished."""
+    global active_session
+    active_session["is_finished"] = True
+    active_session["id"] = None
+    return {"status": "stopped"}
 
 def frame_generator(path, session_id):
     """
@@ -114,6 +145,53 @@ async def video_feed(filename: str = Query(...), session_id: str = Query(...)):
     return StreamingResponse(
         frame_generator(path, session_id), 
         media_type="multipart/x-mixed-replace; boundary=frame"
+    )
+
+
+def camera_frame_generator(session_id, camera_index):
+    """
+    Reads frames from a USB camera and runs the same per-frame processing as file input.
+    """
+    cap = cv2.VideoCapture(camera_index)
+    if not cap.isOpened():
+        active_session["is_finished"] = True
+        return
+
+    try:
+        while cap.isOpened():
+            if session_id != active_session["id"] or active_session["is_finished"]:
+                break
+
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                continue
+
+            proc = active_session["processor"]
+            try:
+                annotated_frame = proc.process_and_annotate(frame) if proc else frame
+            except Exception as e:
+                print(f"Camera Frame Processing Exception: {e}")
+                annotated_frame = frame
+
+            if annotated_frame is not None:
+                success, buffer = cv2.imencode('.jpg', annotated_frame)
+                if success:
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+    finally:
+        cap.release()
+        active_session["is_finished"] = True
+
+
+@app.get("/camera-feed")
+async def camera_feed(
+    session_id: str = Query(...),
+    camera_index: Optional[int] = Query(default=None),
+):
+    device_index = camera_index if camera_index is not None else config.CAMERA_INDEX
+    return StreamingResponse(
+        camera_frame_generator(session_id, device_index),
+        media_type="multipart/x-mixed-replace; boundary=frame",
     )
 
 @app.get("/get-result")

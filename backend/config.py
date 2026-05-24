@@ -16,3 +16,6 @@ LOCK_COUNT = 10
 
 CROP_EXPAND = 50
 SAVE_CROPS_DIR = "angleModelData"
+
+# USB / live camera (OpenCV device index; 0 = default camera)
+CAMERA_INDEX = int(os.environ.get("CAMERA_INDEX", "0"))
