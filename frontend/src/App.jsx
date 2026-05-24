@@ -1,9 +1,46 @@
 // frontend/src/App.jsx
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
+import { getApiBase, getWsBase } from './api';
 
-const API_BASE = "http://178.63.89.118:8000";
-const WS_BASE = API_BASE.replace(/^http/, 'ws');
+async function acquireCameraStream() {
+  const attempts = [
+    { video: { width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false },
+    { video: { width: { ideal: 640 }, height: { ideal: 480 } }, audio: false },
+    { video: true, audio: false },
+  ];
+  let lastError;
+  for (const constraints of attempts) {
+    try {
+      return await navigator.mediaDevices.getUserMedia(constraints);
+    } catch (e) {
+      lastError = e;
+      if (e.name === 'NotAllowedError' || e.name === 'NotFoundError') {
+        throw e;
+      }
+    }
+  }
+  throw lastError;
+}
+
+function formatCameraError(e) {
+  switch (e?.name) {
+    case 'NotAllowedError':
+      return 'Camera permission denied. Allow camera access and try again.';
+    case 'NotFoundError':
+      return 'No camera found. Connect a USB camera and try again.';
+    case 'NotReadableError':
+      return 'Camera is in use by another application. Close it and try again.';
+    case 'OverconstrainedError':
+      return 'Camera settings are not supported. A simpler mode will be used on retry.';
+    case 'AbortError':
+      return 'Camera access was interrupted. Please try again.';
+    default:
+      return e?.message
+        ? `Could not access camera: ${e.message}`
+        : 'Could not access camera. Check permissions and that no other app is using it.';
+  }
+}
 
 function App() {
   const [status, setStatus] = useState('idle');
@@ -173,7 +210,7 @@ function App() {
     if (status === 'processing' && activeInputSource === 'video') {
       interval = setInterval(async () => {
         try {
-          const res = await axios.get(`${API_BASE}/get-result`);
+          const res = await axios.get(`${getApiBase()}/get-result`);
           if (res.data.bees) {
             applyBeeResults(res.data.bees);
           }
@@ -209,7 +246,7 @@ function App() {
 
     try {
       setStatus('uploading');
-      const res = await axios.post(`${API_BASE}/upload-video`, formData, {
+      const res = await axios.post(`${getApiBase()}/upload-video`, formData, {
         onUploadProgress: (progressEvent) => {
           const percent = Math.round(
             (progressEvent.loaded * 100) / progressEvent.total
@@ -221,7 +258,7 @@ function App() {
       setActiveInputSource('video');
       setStatus('processing');
       setVideoUrl(
-        `${API_BASE}/video-feed?filename=${res.data.filename}&session_id=${res.data.session_id}`
+        `${getApiBase()}/video-feed?filename=${res.data.filename}&session_id=${res.data.session_id}`
       );
     } catch (e) {
       alert('Upload failed');
@@ -251,26 +288,20 @@ function App() {
     }
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          facingMode: 'environment',
-        },
-        audio: false,
-      });
+      const stream = await acquireCameraStream();
 
       mediaStreamRef.current = stream;
       const video = videoRef.current;
       if (!video) {
         stream.getTracks().forEach((t) => t.stop());
+        setCameraError('Camera UI failed to initialize. Refresh the page and try again.');
         return;
       }
 
       video.srcObject = stream;
       await video.play();
 
-      const ws = new WebSocket(`${WS_BASE}/ws/live`);
+      const ws = new WebSocket(`${getWsBase()}/ws/live`);
       ws.binaryType = 'arraybuffer';
       wsRef.current = ws;
 
@@ -284,7 +315,9 @@ function App() {
       ws.onmessage = handleWebSocketMessage;
 
       ws.onerror = () => {
-        setCameraError('WebSocket connection failed.');
+        setCameraError(
+          'Could not connect to the AI server. Ensure the backend is running and Caddy proxies /ws to port 8000.'
+        );
         stopCameraStream();
         setStatus('idle');
         setActiveInputSource(null);
@@ -299,13 +332,7 @@ function App() {
     } catch (e) {
       console.error('Camera start error:', e);
       stopCameraStream();
-      if (e.name === 'NotAllowedError') {
-        setCameraError('Camera permission denied. Allow camera access and try again.');
-      } else if (e.name === 'NotFoundError') {
-        setCameraError('No camera found. Connect a USB camera and try again.');
-      } else {
-        setCameraError('Could not access camera.');
-      }
+      setCameraError(formatCameraError(e));
       setStatus('idle');
       setActiveInputSource(null);
     }
@@ -315,7 +342,7 @@ function App() {
     stopCameraStream();
     if (status === 'processing' || status === 'uploading') {
       try {
-        await axios.post(`${API_BASE}/stop-session`);
+        await axios.post(`${getApiBase()}/stop-session`);
       } catch (e) {
         console.warn('Stop session:', e);
       }
@@ -332,7 +359,7 @@ function App() {
   const handleStopCamera = async () => {
     stopCameraStream();
     try {
-      await axios.post(`${API_BASE}/stop-session`);
+      await axios.post(`${getApiBase()}/stop-session`);
     } catch (e) {
       console.warn('Stop session:', e);
     }
