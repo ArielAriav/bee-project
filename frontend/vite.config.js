@@ -11,6 +11,7 @@ const backendProxy = {
   '/get-result': { target: 'http://127.0.0.1:8000', changeOrigin: true },
   '/video-feed': { target: 'http://127.0.0.1:8000', changeOrigin: true },
   '/stop-session': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+  '/health': { target: 'http://127.0.0.1:8000', changeOrigin: true },
 };
 
 export default defineConfig({

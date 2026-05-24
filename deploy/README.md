@@ -22,12 +22,20 @@ sudo systemctl status bee-backend bee-frontend caddy
 ## Verify
 
 ```bash
-# Backend should respond
-curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8000/get-result
-
-# Through Caddy (from the server)
-curl -s -o /dev/null -w "%{http_code}\n" https://bee-vision.duckdns.org/get-result
+chmod +x deploy/verify-backend.sh
+./deploy/verify-backend.sh
 ```
+
+Or manually:
+
+```bash
+curl -s http://127.0.0.1:8000/health
+# Must show: "websocket_live": true
+
+curl -s https://bee-vision.duckdns.org/health
+```
+
+If `/health` returns 404, the server code is **out of date** — run `git pull` and `sudo systemctl restart bee-backend`.
 
 In the browser, open DevTools → Network → WS and confirm `wss://bee-vision.duckdns.org/ws/live` connects with status **101**.
 

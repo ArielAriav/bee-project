@@ -86,6 +86,16 @@ def cleanup_temporary_files():
         except Exception as e:
             print(f"Cleanup Error: {e}")
 
+@app.get("/health")
+async def health():
+    """Used to verify the deployed backend includes live-camera WebSocket support."""
+    return {
+        "status": "ok",
+        "features": {"websocket_live": True},
+        "websocket_path": "/ws/live",
+    }
+
+
 @app.post("/upload-video")
 async def upload(file: UploadFile = File(...)):
     global active_session

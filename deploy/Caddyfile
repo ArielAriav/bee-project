@@ -7,6 +7,7 @@ bee-vision.duckdns.org {
 	# FastAPI backend (HTTP + WebSocket) — must come BEFORE the frontend catch-all
 	@backend_paths {
 		path /ws/*
+		path /health
 		path /upload-video
 		path /get-result
 		path /video-feed*
