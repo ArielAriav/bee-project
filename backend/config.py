@@ -12,7 +12,7 @@ MAX_DIGITS = 3
 OCR_EVERY = 4
 
 # Locking Logic
-LOCK_COUNT = 10
+LOCK_COUNT = 3
 
 CROP_EXPAND = 50
 SAVE_CROPS_DIR = "angleModelData"
